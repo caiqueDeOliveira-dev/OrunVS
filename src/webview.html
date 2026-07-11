@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { background: linear-gradient(135deg, #070707 0%, #120303 100%); color: #e0e0e0; font-family: sans-serif; padding: 12px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+        .header-area { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ff1a1a; padding-bottom: 8px; margin-bottom: 8px; }
+        h2 { color: #ff1a1a; text-transform: uppercase; font-size: 1.1rem; letter-spacing: 1.5px; margin: 0; font-weight: 800; text-shadow: 0 0 10px rgba(255, 26, 26, 0.3); }
+        .controles { display: flex; gap: 6px; }
+        select, .btn-clear { background: #1a0505; color: #ff3333; border: 1px solid #ff1a1a; border-radius: 4px; padding: 3px 6px; font-weight: bold; cursor: pointer; outline: none; transition: all 0.2s ease; }
+        select:hover, .btn-clear:hover { background: #ff1a1a; color: white; box-shadow: 0 0 8px #ff1a1a; }
+        #chat-container { flex: 1; overflow-y: auto; margin-bottom: 12px; border: 1px solid #2e0d0d; border-radius: 6px; padding: 8px; background: rgba(10, 10, 10, 0.8); box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
+        .input-area { display: flex; gap: 6px; }
+        textarea { flex: 1; background: #141414; border: 1px solid #3d1212; color: #ffffff; padding: 10px; resize: none; border-radius: 6px; font-family: inherit; font-size: 0.9rem; transition: border 0.2s; }
+        textarea:focus { outline: none; border: 1px solid #ff1a1a; box-shadow: 0 0 5px rgba(255, 26, 26, 0.4); }
+        button#sendBtn { background: #ff1a1a; color: white; border: none; padding: 0 18px; cursor: pointer; font-weight: bold; border-radius: 6px; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.5px; transition: all 0.2s; }
+        button#sendBtn:hover { background: #e60000; box-shadow: 0 0 10px rgba(255, 26, 26, 0.6); }
+        .message { margin: 10px 0; padding: 10px; border-radius: 6px; line-height: 1.5; font-size: 0.9rem; }
+        .user { background: #212121; border-left: 4px solid #ff1a1a; border-right: 1px solid rgba(255,26,26,0.1); }
+        .ai { background: #170d0d; border-left: 4px solid #ff5555; border-right: 1px solid rgba(255,85,85,0.1); white-space: pre-wrap; font-family: monospace; color: #ffcccc; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .lobo-pensando { display: flex; align-items: center; gap: 8px; color: #ff5555; font-weight: bold; animation: pulse 1.5s infinite alternate; }
+        @keyframes pulse { 0% { opacity: 0.4; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div class="header-area">
+        <h2>🐺 OrunVS AI</h2>
+        <div class="controles">
+            <button class="btn-clear" id="clearBtn" title="Limpar">🗑️</button>
+            <select id="modelSelect">
+                <option value="qwen2.5-coder:7b">Qwen 7B</option>
+                <option value="qwen2.5-coder:14b" selected>Qwen 14B</option>
+            </select>
+        </div>
+    </div>
+    <div id="chat-container"></div>
+    <div class="input-area">
+        <textarea id="prompt" rows="2" placeholder="Mande a ordem para o lobo..."></textarea>
+        <button id="sendBtn">Mandar</button>
+    </div>
+    <script>
+        const vscode = acquireVsCodeApi();
+        const chatContainer = document.getElementById("chat-container");
+        const promptInput = document.getElementById("prompt");
+        const sendBtn = document.getElementById("sendBtn");
+        const modelSelect = document.getElementById("modelSelect");
+        const clearBtn = document.getElementById("clearBtn");
+        // Dentro do eventListener, após adicionar o HTML:
+        const container = document.getElementById('chat-container');
+        container.scrollTop = container.scrollHeight; // Faz o chat descer automaticamente
+
+        sendBtn.addEventListener("click", function() {
+            const text = promptInput.value.trim();
+            if(!text) return;
+            chatContainer.innerHTML += '<div class="message user"><b>Você:</b> ' + text + '</div>';
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            vscode.postMessage({ type: "promptEnviado", value: text, model: modelSelect.value });
+            promptInput.value = "";
+        });
+
+        clearBtn.addEventListener("click", function() {
+            chatContainer.innerHTML = '<div class="message user" style="border-left: 3px solid #555; background: #1c1c1c; text-align:center;">🧠 Memória limpa.</div>';
+            vscode.postMessage({ type: "limparHistorico" });
+        });
+
+        promptInput.addEventListener("keydown", function(e) {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                sendBtn.click();
+            }
+        });
+
+        window.addEventListener("message", function(event) {
+            const message = event.data;
+            if(message.type === "respostaIA") {
+                if (message.userText) {
+                    chatContainer.innerHTML += '<div class="message user"><b>Ação:</b> ' + message.userText + '</div>';
+                }
+                if (message.value === "LOGOPROCESSANDO_GATILHO") {
+                    const antigo = document.getElementById("pensando");
+                    if (antigo) antigo.remove();
+                    chatContainer.innerHTML += '<div id="pensando" class="message ai lobo-pensando">🐺 <span>Rastreando código...</span></div>';
+                } else {
+                    const pensando = document.getElementById("pensando");
+                    if (pensando) pensando.remove();
+                    chatContainer.innerHTML += '<div class="message ai"><b>OrunVS:</b><br>' + message.value + '</div>';
+                }
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        });
+    </script>
+</body>
+</html>

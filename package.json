@@ -1,0 +1,188 @@
+{
+  "name": "orunvs",
+  "displayName": "OrunVS",
+  "description": "Assistente de IA para VS Code com suporte a múltiplos providers (Gemini, Groq, OpenRouter, DeepSeek, GitHub Models, Hugging Face, Ollama)",
+  "version": "0.1.0",
+  "publisher": "OrunST",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OrunST/OrunVS"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "chat",
+    "gemini",
+    "groq",
+    "openrouter",
+    "deepseek",
+    "ollama",
+    "assistant",
+    "code"
+  ],
+  "activationEvents": [
+    "onView:orunvs.chatView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "orunvs-sidebar",
+          "title": "OrunVS",
+          "icon": "resources/logo.svg"
+        }
+      ]
+    },
+    "views": {
+      "orunvs-sidebar": [
+        {
+          "type": "webview",
+          "id": "orunvs.chatView",
+          "name": "Chat OrunVS"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "orunvs.perguntar",
+        "title": "OrunVS: Fazer uma pergunta"
+      },
+      {
+        "command": "orunvs.selecionarProvider",
+        "title": "OrunVS: Trocar provider de IA"
+      },
+      {
+        "command": "orunvs.encontrarBugs",
+        "title": "OrunVS: Encontrar bugs no código ativo"
+      },
+      {
+        "command": "orunvs.explicarCodigo",
+        "title": "OrunVS: Explicar código selecionado"
+      },
+      {
+        "command": "orunvs.refatorarCodigo",
+        "title": "OrunVS: Refatorar código selecionado"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorHasSelection",
+          "command": "orunvs.explicarCodigo",
+          "group": "OrunVS@1"
+        },
+        {
+          "when": "editorHasSelection",
+          "command": "orunvs.refatorarCodigo",
+          "group": "OrunVS@2"
+        },
+        {
+          "when": "editorTextFocus",
+          "command": "orunvs.encontrarBugs",
+          "group": "OrunVS@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OrunVS",
+      "properties": {
+        "orunvs.provider": {
+          "type": "string",
+          "enum": ["local", "groq", "gemini", "openrouter", "deepseek", "github", "huggingface"],
+          "default": "gemini",
+          "description": "Provider de IA ativo"
+        },
+        "orunvs.geminiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key do Google Gemini"
+        },
+        "orunvs.groqKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key do Groq Cloud"
+        },
+        "orunvs.openrouterKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key do OpenRouter"
+        },
+        "orunvs.deepseekKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key do DeepSeek"
+        },
+        "orunvs.huggingfaceKey": {
+          "type": "string",
+          "default": "",
+          "description": "Token do Hugging Face (hf_...)"
+        },
+        "orunvs.githubToken": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub Personal Access Token para GitHub Models"
+        },
+        "orunvs.modelName": {
+          "type": "string",
+          "default": "gemini-2.0-flash",
+          "description": "Nome do modelo"
+        },
+        "orunvs.systemPrompt": {
+          "type": "string",
+          "default": "",
+          "description": "Custom prompt do sistema (deixe vazio para usar o prompt padrão do OrunVS)"
+        },
+        "orunvs.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Temperatura da IA (0 = preciso, 2 = criativo)"
+        },
+        "orunvs.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "minimum": 256,
+          "maximum": 8192,
+          "description": "Máximo de tokens na resposta"
+        },
+        "orunvs.presets": {
+          "type": "array",
+          "default": [
+            { "label": "Explique", "prompt": "Explique isto em detalhes:" },
+            { "label": "Refatore", "prompt": "Refatore o código para melhorar legibilidade e performance:" },
+            { "label": "Testes", "prompt": "Escreva testes unitários para:" },
+            { "label": "Documente", "prompt": "Adicione documentação clara para:" }
+          ],
+          "description": "Lista de presets (botões rápidos)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.43",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "markdown-it": "^14.0.0",
+    "@types/markdown-it": "^14.0.0",
+    "openai": "^6.46.0"
+  }
+}
