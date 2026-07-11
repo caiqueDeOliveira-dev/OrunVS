@@ -6,7 +6,7 @@
   "publisher": "OrunST",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OrunST/OrunVS"
+    "url": "https://github.com/caiqueDeOliveira-dev/OrunVS"
   },
   "engines": {
     "vscode": "^1.90.0"

@@ -1,6 +1,6 @@
 # OrunVS
 
-Assistente de IA integrado ao Visual Studio Code com suporte a múltiplos providers.
+Extensão para Visual Studio Code — Assistente de IA com suporte a múltiplos providers.
 
 ![OrunVS](resources/logo.png)
 
