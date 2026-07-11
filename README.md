@@ -34,7 +34,7 @@ Extensão para Visual Studio Code — Assistente de IA com suporte a múltiplos 
 
 1. Clone o repositório:
    ```bash
-   git clone https://github.com/OrunST/OrunVS.git
+   git clone https://github.com/caiqueDeOliveira-dev/OrunVS.git
    ```
 
 2. Abra o projeto no VS Code:
@@ -56,23 +56,27 @@ Extensão para Visual Studio Code — Assistente de IA com suporte a múltiplos 
 
 ### Via VSIX (compactado)
 
-1. Baixe o arquivo `.vsix` nas [releases](https://github.com/OrunST/OrunVS/releases)
+1. Baixe o arquivo `.vsix` nas [releases](https://github.com/caiqueDeOliveira-dev/OrunVS/releases)
 2. No VS Code, vá em **Extensions** → **...** → **Install from VSIX...**
 3. Selecione o arquivo baixado
 
 ## Configuração
 
+**Cada usuário deve configurar suas próprias API keys.** A extensão não inclui chaves — nem gratuitas nem pagas. Você precisa criar sua conta no provider e gerar sua chave.
+
+> **Importante:** Mesmo os providers gratuitos exigem que você crie uma conta e gere uma API key no site deles. Ninguém usa suas chaves e você não usa as dos outros.
+
 Após instalar, configure sua API key em **Settings** → **Extensions** → **OrunVS**:
 
-| Provider | Configuração | Gratuito? |
-|----------|-------------|-----------|
-| Gemini | `orunvs.geminiKey` | Sim |
-| Groq | `orunvs.groqKey` | Sim |
-| OpenRouter | `orunvs.openrouterKey` | Sim |
-| DeepSeek | `orunvs.deepseekKey` | Sim |
-| GitHub | `orunvs.githubToken` | Sim |
-| Hugging Face | `orunvs.huggingfaceKey` | Sim |
-| Ollama | Nenhuma (local) | Sim |
+| Provider | Configuração | Gratuito? | Como obter |
+|----------|-------------|-----------|------------|
+| Gemini | `orunvs.geminiKey` | Sim | [Google AI Studio](https://aistudio.google.com/apikey) |
+| Groq | `orunvs.groqKey` | Sim | [Groq Cloud](https://console.groq.com) |
+| OpenRouter | `orunvs.openrouterKey` | Sim/Pago | [OpenRouter](https://openrouter.ai/keys) |
+| DeepSeek | `orunvs.deepseekKey` | Sim/Pago | [DeepSeek](https://platform.deepseek.com) |
+| GitHub | `orunvs.githubToken` | Sim | [GitHub Settings](https://github.com/settings/tokens) |
+| Hugging Face | `orunvs.huggingfaceKey` | Sim | [Hugging Face](https://huggingface.co/settings/tokens) |
+| Ollama | Nenhuma (local) | Sim | [Ollama](https://ollama.com) — roda no seu PC |
 
 ## Comandos
 
