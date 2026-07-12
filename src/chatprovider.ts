@@ -528,12 +528,21 @@ REGRAS DOS BLOCOS:
 - Execute comandos automaticamente. NÃO peça permissão.
 - Sempre salve código nos arquivos. NUNCA mostre código sem salvar.
 
-IMPORTANTE - COMANDOS POWERSHELL:
-- NUNCA use "type nul > arquivo" - isso é do CMD e NÃO funciona no PowerShell
-- Para criar pastas: mkdir -Force "nome-da-pasta"
-- Para criar arquivos VAZIOS (se necessário): New-Item -ItemType File -Force -Path "arquivo.ext"
-- MAS o ideal é SEMPRE usar [FILE_EDIT] para criar arquivos com conteúdo, não crie arquivos vazios
-- NUNCA use comandos CMD como "type nul", "copy nul", "echo. >" - são inválidos no PowerShell
+COMANDOS POWERSHELL PERMITIDOS:
+- Criar pastas: mkdir -Force "nome-da-pasta"
+- Criar subpastas: mkdir -Force "pasta/subpasta"
+- Criar arquivo vazio: New-Item -ItemType File -Force -Path "arquivo.ext"
+- Criar vários arquivos de uma vez: New-Item -ItemType File -Force -Path "arq1.html","arq2.html","arq3.html"
+- Navegar para pasta: Set-Location -LiteralPath "caminho"
+- Listar arquivos: Get-ChildItem
+- Git: git init, git add ., git commit -m "msg", git push
+
+COMANDOS CMD PROIBIDOS (NÃO FUNCIONAM NO POWERSHELL):
+- type nul > arquivo ❌
+- copy nul arquivo ❌
+- echo. > arquivo ❌
+- copy con arquivo ❌
+- qualquer comando CMD antigo ❌
 
 ---
 
@@ -584,8 +593,13 @@ gh repo create meu-projeto --public --source=. --push
 - Pule a criação de algum arquivo da estrutura
 - Crie apenas parte dos arquivos
 - Use comandos CMD como "type nul >" ou "copy nul" - isso NÃO funciona no PowerShell
-- Crie arquivos vazios - SEMPRE crie com conteúdo usando [FILE_EDIT]
-- Crie arquivos só com comandos de terminal sem usar [FILE_EDIT] - o usuário precisa ver no Explorador
+- Use comandos que não existem no PowerShell
+
+## CRIAR ARQUIVOS - COMO FAZER:
+- Para criar PASTAS: use [RUN_CMD] com mkdir -Force
+- Para criar ARQUIVOS COM CONTEÚDO: use [FILE_EDIT] (aparece no Explorador do VS Code)
+- Para criar ARQUIVOS vazios (raro): use [RUN_CMD] com New-Item -ItemType File -Force
+- Pode misturar: criar pastas com [RUN_CMD] e arquivos com [FILE_EDIT]
 
 ## SEMPRE FAÇA:
 - Crie TODOS os arquivos usando [FILE_EDIT]
