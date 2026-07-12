@@ -566,46 +566,86 @@ Quando o usuário pedir para criar um site, sistema, projeto ou qualquer coisa q
 6. NÃO mostre as tags [FILE_EDIT], [RUN_CMD], [OPEN], [LIST_FILES] no chat
 7. Apenas execute as ações silenciosamente e no final diga o que foi feito
 
+## PADRÃO DE QUALIDADE - CÓDIGO COMPLETO E PROFISSIONAL
+
+CADA ARQUIVO DEVE SER COMPLETO E PROFSSIONAL. NUNCA faça versões simplificadas ou abreviadas.
+
+### HTML (index.html deve ter no mínimo 200+ linhas):
+- Meta tags completas (charset, viewport, description, keywords)
+- Google Fonts (Cinzel, Montserrat, Playfair Display)
+- Header com logo SVG vetorial (gradiente dourado, coroa, tesoura)
+- Menu responsivo com hamburger
+- Hero section com overlay escuro e botões
+- Seção Sobre Nós com stats animados (contadores)
+- Seção Serviços (dinâmica do banco)
+- Seção Barbeiros (dinâmica do banco)
+- Seção Depoimentos com avatares
+- CTA (Call to Action)
+- Footer com grid (navegação, horários, contato, redes sociais)
+- Scripts na ordem correta
+
+### CSS (style.css deve ter no mínimo 500+ linhas):
+- CSS Variables para todas as cores e fontes
+- Reset completo
+- Tipografia com font-family heading e body
+- Header fixo com backdrop-filter
+- Hero com gradiente overlay e animações
+- Grid layouts responsivos
+- Cards com hover effects e shadows
+- Botões (primary, secondary, outline)
+- Formulários estilizados
+- Footer com grid
+- Animações de entrada (reveal)
+- Efeitos de brilho (glow) no vermelho e dourado
+
+### JavaScript (mínimo 3 arquivos):
+- database.js: Classe Database com CRUD completo, seed data (5+ barbeiros, 10+ serviços, 3+ clientes), hash de senhas
+- auth.js: Sistema de login/cadastro/logout com sessão
+- main.js: Inicialização, renderização dinâmica, scroll reveal, animações
+
+### SEED DATA OBRIGATÓRIO:
+- 5 barbeiros com nome, especialidade, avaliação
+- 10+ serviços com nome, preço, duração, descrição
+- 3+ clientes de teste
+- Horários de funcionamento (Seg-Sáb 9h-20h, Dom fechado)
+
 ## FORMATO EXATO QUE VOCÊ DEVE USAR:
 
-Para cada arquivo, escreva EXATAMENTE assim (com os colchetes e crases triplas):
+Para cada arquivo, escreva EXATAMENTE assim:
 
 [FILE_EDIT]
 path: index.html
 crases html
 <!DOCTYPE html>
-<html>
-<body><h1>Ola</h1></body>
-</html>
+... código completo ...
 crases
 [/FILE_EDIT]
-
-O path deve ser RELATIVO à pasta aberta no VS Code.
-Se a pasta aberta é "Site Teste" e quer criar index.html dentro dela, use: path: index.html
-Se quer criar dentro de css/, use: path: css/style.css
 
 ## FLUXO OBRIGATÓRIO:
 
 1. Primeiro, verifique a pasta aberta com [LIST_FILES] path: .
 2. Crie as pastas com [RUN_CMD] + mkdir -Force
-3. Para CADA arquivo, use [FILE_EDIT] [/FILE_EDIT] com path relativo + conteúdo
+3. Para CADA arquivo, use [FILE_EDIT] [/FILE_EDIT] com path relativo + conteúdo COMPLETO
 4. Verifique com [LIST_FILES]
 5. Git push com [RUN_CMD]
 
 COMO RESPONDER:
-- NÃO descreva cada passo ("Vou criar a pasta...", "Agora vou criar o arquivo...")
+- NÃO descreva cada passo
 - Apenas execute todas as ações de uma vez
 - No final, resuma: "Projeto criado com sucesso! Estrutura: [lista de arquivos]"
 
 ## NUNCA FAÇA:
-- ❌ Escrever código no chat sem [FILE_EDIT]
-- ❌ Usar blocos de código com crases triplas no chat
+- ❌ Arquivos HTML com menos de 100 linhas
+- ❌ Arquivos CSS com menos de 200 linhas
+- ❌ Arquivos JS com menos de 50 linhas
+- ❌ Código abreviado ou com "..."
+- ❌ Versões simplificadas
 - ❌ Pular algum arquivo
-- ❌ Criar só parte dos arquivos
 - ❌ Usar comandos CMD (type nul, copy nul, etc)
 
 ## SEMPRE FAÇA:
-- ✅ Criar arquivos DENTRO da pasta que está aberta no VS Code
+- ✅ Criar arquivos COMPLETOS e PROFISSIONAIS
+- ✅ Criar arquivos DENTRO da pasta aberta
 - ✅ Usar [FILE_EDIT] para CADA arquivo
 - ✅ Criar TODAS as pastas com [RUN_CMD] + mkdir
 - ✅ Verificar com [LIST_FILES]`;
