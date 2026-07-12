@@ -118,7 +118,7 @@ interface Mensagem {
 }
 
 /* ── SISTEMA DE PERMISSOES ── */
-type AcaoTipo = 'EDIT' | 'CREATE' | 'DELETE' | 'RUN_CMD' | 'READ' | 'LIST';
+type AcaoTipo = 'EDIT' | 'CREATE' | 'DELETE' | 'RUN_CMD' | 'READ' | 'LIST' | 'OPEN';
 
 interface Acao {
     tipo: AcaoTipo;
@@ -536,6 +536,7 @@ COMANDOS POWERSHELL PERMITIDOS:
 - Navegar para pasta: Set-Location -LiteralPath "caminho"
 - Listar arquivos: Get-ChildItem
 - Git: git init, git add ., git commit -m "msg", git push
+- Abrir site no navegador: Start-Process "caminho/do/arquivo.html"
 
 COMANDOS CMD PROIBIDOS (NÃO FUNCIONAM NO POWERSHELL):
 - type nul > arquivo ❌
@@ -543,6 +544,11 @@ COMANDOS CMD PROIBIDOS (NÃO FUNCIONAM NO POWERSHELL):
 - echo. > arquivo ❌
 - copy con arquivo ❌
 - qualquer comando CMD antigo ❌
+
+VOCÊ PODE ABRIR SITES NO NAVEGADOR:
+- Para abrir um arquivo HTML no navegador, use [OPEN] com o caminho do arquivo
+- O comando Start-Process abre o arquivo no navegador padrão do sistema
+- Use isso quando o usuário pedir para ver/testar o site
 
 ---
 
@@ -672,6 +678,12 @@ function parseAcoes(texto: string): { acoes: Acao[]; textoSemAcoes: string } {
     }
     limpo = limpo.replace(listRegex, '');
 
+    const openRegex = /\[OPEN\]\s*(.+?)\s*\[\/OPEN\]/gi;
+    while ((match = openRegex.exec(texto)) !== null) {
+        acoes.push({ tipo: 'OPEN', path: match[1].trim() });
+    }
+    limpo = limpo.replace(openRegex, '');
+
     return { acoes, textoSemAcoes: limpo.trim() };
 }
 
@@ -787,6 +799,19 @@ async function executarAcao(acao: Acao, perm: PermissionManager, pasta: string):
                 return `[ARQUIVOS EM ${acao.path || '.'}]\n${arquivos.join('\n')}`;
             } catch (e: any) {
                 return `[ERRO] Nao foi possivel listar ${acao.path}: ${e.message}`;
+            }
+        }
+
+        case 'OPEN': {
+            if (!acao.path) return 'Erro: caminho nao informado';
+            const fullPath = path.isAbsolute(acao.path) ? acao.path : path.join(pasta, acao.path);
+            if (!fs.existsSync(fullPath)) return `[ERRO] Arquivo nao existe: ${acao.path}`;
+            try {
+                const terminal = vscode.window.createTerminal('OrunVS-Open');
+                terminal.sendText(`Start-Process "${fullPath}"`);
+                return `[ABRIR] ${acao.path} - OK`;
+            } catch (e: any) {
+                return `[ERRO] Nao foi possivel abrir ${acao.path}: ${e.message}`;
             }
         }
     }
