@@ -568,12 +568,13 @@ Use [FILE_EDIT] com path e conteúdo entre crases triplas
 
 ## FLUXO OBRIGATÓRIO:
 
-1. Planeje a estrutura de pastas e arquivos
-2. Crie as pastas usando [RUN_CMD] com mkdir -Force
-3. Para CADA arquivo, use [FILE_EDIT] com path + conteúdo entre crases triplas
-4. NÃO pule nenhum arquivo
-5. Verifique com [LIST_FILES]
-6. Git push com [RUN_CMD]
+1. Primeiro, verifique qual pasta do projeto está aberta no VS Code usando [LIST_FILES] path: .
+2. Planeje a estrutura de pastas e arquivos DENTRO dessa pasta
+3. Crie as pastas usando [RUN_CMD] com mkdir -Force ( caminhos relativos à pasta aberta )
+4. Para CADA arquivo, use [FILE_EDIT] com path relativo à pasta aberta
+5. NÃO pule nenhum arquivo
+6. Verifique com [LIST_FILES]
+7. Git push com [RUN_CMD]
 
 ## CADA ARQUIVO = UM [FILE_EDIT]
 
@@ -587,8 +588,11 @@ Cada [FILE_EDIT] deve ter path e conteúdo do arquivo.
 - ❌ Pular algum arquivo
 - ❌ Criar só parte dos arquivos
 - ❌ Usar comandos CMD (type nul, copy nul, etc)
+- ❌ Criar arquivos fora da pasta do projeto aberto
+- ❌ Criar uma nova pasta com o nome do projeto se já existe uma pasta aberta - use a pasta que já está aberta
 
 ## SEMPRE FAÇA:
+- ✅ Criar arquivos DENTRO da pasta que está aberta no VS Code
 - ✅ Usar [FILE_EDIT] para CADA arquivo
 - ✅ Criar TODAS as pastas com [RUN_CMD] + mkdir
 - ✅ Verificar com [LIST_FILES]
