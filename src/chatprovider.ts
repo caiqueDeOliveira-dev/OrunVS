@@ -550,63 +550,49 @@ COMANDOS CMD PROIBIDOS (NÃO FUNCIONAM NO POWERSHELL):
 
 Quando o usuário pedir para criar um site, sistema, projeto ou qualquer coisa que envolva código:
 
-## OBRIGATÓRIO: SEMPRE CRIAR OS ARQUIVOS FISICAMENTE
+## ⚠️ REGRAS CRÍTICAS - LEIA COM ATENÇÃO ⚠️
 
-- NUNCA mostre o código apenas no chat
-- SEMPRE use o bloco [FILE_EDIT] para criar cada arquivo
-- SEMPRE crie a estrutura de pastas completa antes dos arquivos
-- SEMPRE crie TODOS os arquivos, sem exceção
+1. NUNCA escreva código diretamente no chat
+2. NUNCA mostre blocos de código no chat (crases triplas com linguagem)
+3. TODO código DEVE ir para dentro de blocos [FILE_EDIT]
+4. O [FILE_EDIT] cria o arquivo no disco E aparece no Explorador do VS Code
+5. Se você escrever código sem [FILE_EDIT], o arquivo NÃO será criado
+
+## COMO FUNCIONA:
+
+ERRADO (não cria arquivo):
+"Aqui está o index.html:" seguido de código com crases triplas
+
+CORRETO (cria arquivo no Explorador):
+Use [FILE_EDIT] com path e conteúdo entre crases triplas
 
 ## FLUXO OBRIGATÓRIO:
 
 1. Planeje a estrutura de pastas e arquivos
-2. Crie as pastas usando [RUN_CMD] com mkdir -Force "nome-da-pasta"
-3. Crie cada arquivo usando [FILE_EDIT] com o conteúdo completo - os arquivos aparecerão automaticamente no Explorador do VS Code
-4. Verifique que todos os arquivos foram criados usando [LIST_FILES]
-5. Instale dependências usando [RUN_CMD] se necessário
-6. Faça git init, git add, git commit e git push usando [RUN_CMD]
+2. Crie as pastas usando [RUN_CMD] com mkdir -Force
+3. Para CADA arquivo, use [FILE_EDIT] com path + conteúdo entre crases triplas
+4. NÃO pule nenhum arquivo
+5. Verifique com [LIST_FILES]
+6. Git push com [RUN_CMD]
 
-IMPORTANTE: Ao usar [FILE_EDIT], o arquivo é criado fisicamente no disco e aparece no Explorador do VS Code. NÃO crie arquivos apenas com comandos de terminal - SEMPRE use [FILE_EDIT] para que o usuário veja os arquivos sendo criados no painel lateral do Explorador.
+## CADA ARQUIVO = UM [FILE_EDIT]
 
-## EXEMPLO DE CRIAÇÃO DE PROJETO:
-
-Primeiro, crie as pastas:
-[RUN_CMD]
-mkdir -Force "meu-projeto/css"
-mkdir -Force "meu-projeto/js"
-mkdir -Force "meu-projeto/assets"
-[/RUN_CMD]
-
-Depois, crie cada arquivo usando [FILE_EDIT] com path e conteudo entre crases triplas.
-Para GitHub:
-[RUN_CMD]
-cd meu-projeto
-git init
-git add .
-git commit -m "feat: descricao do projeto"
-gh repo create meu-projeto --public --source=. --push
-[/RUN_CMD]
+Se o projeto tem 10 arquivos, você deve usar [FILE_EDIT] 10 vezes.
+Cada [FILE_EDIT] deve ter path e conteúdo do arquivo.
 
 ## NUNCA FAÇA:
-- Mostre o código formatado no chat sem criar arquivo
-- Diga "aqui está o código" sem usar [FILE_EDIT]
-- Pule a criação de algum arquivo da estrutura
-- Crie apenas parte dos arquivos
-- Use comandos CMD como "type nul >" ou "copy nul" - isso NÃO funciona no PowerShell
-- Use comandos que não existem no PowerShell
-
-## CRIAR ARQUIVOS - COMO FAZER:
-- Para criar PASTAS: use [RUN_CMD] com mkdir -Force
-- Para criar ARQUIVOS COM CONTEÚDO: use [FILE_EDIT] (aparece no Explorador do VS Code)
-- Para criar ARQUIVOS vazios (raro): use [RUN_CMD] com New-Item -ItemType File -Force
-- Pode misturar: criar pastas com [RUN_CMD] e arquivos com [FILE_EDIT]
+- ❌ Escrever código no chat sem [FILE_EDIT]
+- ❌ Mostrar "aqui está o código" sem criar o arquivo
+- ❌ Usar blocos de código com crases triplas no chat
+- ❌ Pular algum arquivo
+- ❌ Criar só parte dos arquivos
+- ❌ Usar comandos CMD (type nul, copy nul, etc)
 
 ## SEMPRE FAÇA:
-- Crie TODOS os arquivos usando [FILE_EDIT]
-- Crie TODAS as pastas usando [RUN_CMD] com mkdir
-- Verifique se tudo foi criado usando [LIST_FILES]
-- Informe o caminho de cada arquivo criado
-- Ao final, confirme a estrutura completa criada`;
+- ✅ Usar [FILE_EDIT] para CADA arquivo
+- ✅ Criar TODAS as pastas com [RUN_CMD] + mkdir
+- ✅ Verificar com [LIST_FILES]
+- ✅ Confirmar estrutura criada ao final`;
 }
 
 class PermissionManager {
