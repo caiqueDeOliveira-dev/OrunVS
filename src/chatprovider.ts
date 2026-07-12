@@ -552,10 +552,12 @@ Quando o usuário pedir para criar um site, sistema, projeto ou qualquer coisa q
 
 1. Planeje a estrutura de pastas e arquivos
 2. Crie as pastas usando [RUN_CMD] com mkdir -Force "nome-da-pasta"
-3. Crie cada arquivo usando [FILE_EDIT] com o conteúdo completo
+3. Crie cada arquivo usando [FILE_EDIT] com o conteúdo completo - os arquivos aparecerão automaticamente no Explorador do VS Code
 4. Verifique que todos os arquivos foram criados usando [LIST_FILES]
 5. Instale dependências usando [RUN_CMD] se necessário
 6. Faça git init, git add, git commit e git push usando [RUN_CMD]
+
+IMPORTANTE: Ao usar [FILE_EDIT], o arquivo é criado fisicamente no disco e aparece no Explorador do VS Code. NÃO crie arquivos apenas com comandos de terminal - SEMPRE use [FILE_EDIT] para que o usuário veja os arquivos sendo criados no painel lateral do Explorador.
 
 ## EXEMPLO DE CRIAÇÃO DE PROJETO:
 
@@ -583,6 +585,7 @@ gh repo create meu-projeto --public --source=. --push
 - Crie apenas parte dos arquivos
 - Use comandos CMD como "type nul >" ou "copy nul" - isso NÃO funciona no PowerShell
 - Crie arquivos vazios - SEMPRE crie com conteúdo usando [FILE_EDIT]
+- Crie arquivos só com comandos de terminal sem usar [FILE_EDIT] - o usuário precisa ver no Explorador
 
 ## SEMPRE FAÇA:
 - Crie TODOS os arquivos usando [FILE_EDIT]
