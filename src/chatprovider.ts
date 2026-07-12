@@ -695,12 +695,21 @@ function parseAcoes(texto: string): { acoes: Acao[]; textoSemAcoes: string } {
     const acoes: Acao[] = [];
     let limpo = texto;
 
-    const editRegex = /\[FILE_EDIT\]\s*path:\s*(.+?)\s*```[a-z]*\s*([\s\S]*?)```\s*\[\/FILE_EDIT\]/gi;
+    // Tenta múltiplos formatos de [FILE_EDIT]
+    // Formato 1: [FILE_EDIT]\npath: ...\n```lang\n...\n```\n[/FILE_EDIT]
+    const editRegex1 = /\[FILE_EDIT\]\s*path:\s*(.+?)\s*```[a-z]*\s*([\s\S]*?)```\s*\[\/FILE_EDIT\]/gi;
     let match;
-    while ((match = editRegex.exec(texto)) !== null) {
+    while ((match = editRegex1.exec(texto)) !== null) {
         acoes.push({ tipo: 'EDIT', path: match[1].trim(), conteudo: match[2].trim() });
     }
-    limpo = limpo.replace(editRegex, '');
+    limpo = limpo.replace(editRegex1, '');
+
+    // Formato 2: [FILE_EDIT]\npath: ...\nconteudo...\n[/FILE_EDIT] (sem crases)
+    const editRegex2 = /\[FILE_EDIT\]\s*path:\s*(.+?)\s*\n([\s\S]*?)\s*\[\/FILE_EDIT\]/gi;
+    while ((match = editRegex2.exec(limpo)) !== null) {
+        acoes.push({ tipo: 'EDIT', path: match[1].trim(), conteudo: match[2].trim() });
+    }
+    limpo = limpo.replace(editRegex2, '');
 
     const deleteRegex = /\[FILE_DELETE\]\s*path:\s*(.+?)\s*\[\/FILE_DELETE\]/gi;
     while ((match = deleteRegex.exec(texto)) !== null) {
@@ -1249,6 +1258,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             // finaliza stream: substitui a msg streaming pela final
             const { acoes, textoSemAcoes } = parseAcoes(resposta);
 
+            // Debug: mostra quantos FILE_EDIT foram encontrados
+            const fileEditCount = (resposta.match(/\[FILE_EDIT\]/gi) || []).length;
+            const runCmdCount = (resposta.match(/\[RUN_CMD\]/gi) || []).length;
+
             let logAcoes = '';
             let resultadosLeitura = '';
             if (acoes.length > 0) {
@@ -1256,8 +1269,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 if (!pasta) {
                     logAcoes = '<div style="color:#ffaa00;font-size:11px">⚠ Abra uma pasta/workspace para executar ações</div>';
                 } else {
-                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta do projeto: ${pasta}</div>`;
-                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${acoes.length} ação(ões) encontrada(s)</div>`;
+                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta: ${pasta}</div>`;
+                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${fileEditCount} arquivo(s) | ${runCmdCount} comando(s)</div>`;
                     for (const acao of acoes) {
                         const resultado = await executarAcao(acao, this._perm, pasta);
                         if (acao.tipo === 'READ' || acao.tipo === 'LIST') {
@@ -1269,7 +1282,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     }
                 }
             } else {
-                logAcoes = '<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação [FILE_EDIT] ou [RUN_CMD] encontrada na resposta</div>';
+                logAcoes = `<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação encontrada</div>`;
+                logAcoes += `<div style="color:#ff8844;font-size:11px">Tags [FILE_EDIT]: ${fileEditCount} | Tags [RUN_CMD]: ${runCmdCount}</div>`;
+                if (fileEditCount === 0 && runCmdCount === 0) {
+                    logAcoes += `<div style="color:#ff4444;font-size:11px">A IA não usou blocos [FILE_EDIT] ou [RUN_CMD]. Ela gerou código no chat.</div>`;
+                }
             }
 
             const textoExibicao = textoSemAcoes || (acoes.length === 0 ? resposta : '');
