@@ -550,53 +550,51 @@ COMANDOS CMD PROIBIDOS (NÃO FUNCIONAM NO POWERSHELL):
 
 Quando o usuário pedir para criar um site, sistema, projeto ou qualquer coisa que envolva código:
 
-## ⚠️ REGRAS CRÍTICAS - LEIA COM ATENÇÃO ⚠️
+## ⚠️ REGRAS CRÍTICAS ⚠️
 
-1. NUNCA escreva código diretamente no chat
-2. NUNCA mostre blocos de código no chat (crases triplas com linguagem)
-3. TODO código DEVE ir para dentro de blocos [FILE_EDIT]
-4. O [FILE_EDIT] cria o arquivo no disco E aparece no Explorador do VS Code
-5. Se você escrever código sem [FILE_EDIT], o arquivo NÃO será criado
+1. NUNCA escreva código diretamente no chat como texto normal
+2. NUNCA mostre blocos de código com crases triplas no chat
+3. TODO código DEVE ir para dentro de blocos [FILE_EDIT] [/FILE_EDIT]
+4. Se você escrever código sem [FILE_EDIT], o arquivo NÃO será criado
 
-## COMO FUNCIONA:
+## FORMATO EXATO QUE VOCÊ DEVE USAR:
 
-ERRADO (não cria arquivo):
-"Aqui está o index.html:" seguido de código com crases triplas
+Para cada arquivo, escreva EXATAMENTE assim (com os colchetes e crases triplas):
 
-CORRETO (cria arquivo no Explorador):
-Use [FILE_EDIT] com path e conteúdo entre crases triplas
+[FILE_EDIT]
+path: index.html
+crases html
+<!DOCTYPE html>
+<html>
+<body><h1>Ola</h1></body>
+</html>
+crases
+[/FILE_EDIT]
+
+O path deve ser RELATIVO à pasta aberta no VS Code.
+Se a pasta aberta é "Site Teste" e quer criar index.html dentro dela, use: path: index.html
+Se quer criar dentro de css/, use: path: css/style.css
 
 ## FLUXO OBRIGATÓRIO:
 
-1. Primeiro, verifique qual pasta do projeto está aberta no VS Code usando [LIST_FILES] path: .
-2. Planeje a estrutura de pastas e arquivos DENTRO dessa pasta
-3. Crie as pastas usando [RUN_CMD] com mkdir -Force ( caminhos relativos à pasta aberta )
-4. Para CADA arquivo, use [FILE_EDIT] com path relativo à pasta aberta
-5. NÃO pule nenhum arquivo
-6. Verifique com [LIST_FILES]
-7. Git push com [RUN_CMD]
-
-## CADA ARQUIVO = UM [FILE_EDIT]
-
-Se o projeto tem 10 arquivos, você deve usar [FILE_EDIT] 10 vezes.
-Cada [FILE_EDIT] deve ter path e conteúdo do arquivo.
+1. Primeiro, verifique a pasta aberta com [LIST_FILES] path: .
+2. Crie as pastas com [RUN_CMD] + mkdir -Force
+3. Para CADA arquivo, use [FILE_EDIT] [/FILE_EDIT] com path relativo + conteúdo
+4. Verifique com [LIST_FILES]
+5. Git push com [RUN_CMD]
 
 ## NUNCA FAÇA:
 - ❌ Escrever código no chat sem [FILE_EDIT]
-- ❌ Mostrar "aqui está o código" sem criar o arquivo
 - ❌ Usar blocos de código com crases triplas no chat
 - ❌ Pular algum arquivo
 - ❌ Criar só parte dos arquivos
 - ❌ Usar comandos CMD (type nul, copy nul, etc)
-- ❌ Criar arquivos fora da pasta do projeto aberto
-- ❌ Criar uma nova pasta com o nome do projeto se já existe uma pasta aberta - use a pasta que já está aberta
 
 ## SEMPRE FAÇA:
 - ✅ Criar arquivos DENTRO da pasta que está aberta no VS Code
 - ✅ Usar [FILE_EDIT] para CADA arquivo
 - ✅ Criar TODAS as pastas com [RUN_CMD] + mkdir
-- ✅ Verificar com [LIST_FILES]
-- ✅ Confirmar estrutura criada ao final`;
+- ✅ Verificar com [LIST_FILES]`;
 }
 
 class PermissionManager {
@@ -1185,15 +1183,20 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 if (!pasta) {
                     logAcoes = '<div style="color:#ffaa00;font-size:11px">⚠ Abra uma pasta/workspace para executar ações</div>';
                 } else {
+                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta do projeto: ${pasta}</div>`;
+                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${acoes.length} ação(ões) encontrada(s)</div>`;
                     for (const acao of acoes) {
                         const resultado = await executarAcao(acao, this._perm, pasta);
                         if (acao.tipo === 'READ' || acao.tipo === 'LIST') {
                             resultadosLeitura += resultado + '\n\n';
                         } else {
-                            logAcoes += `<div style="font-size:11px;color:#66ff66">${resultado}</div>`;
+                            const cor = resultado.includes('NEGADA') ? '#ff4444' : '#66ff66';
+                            logAcoes += `<div style="font-size:11px;color:${cor}">${resultado}</div>`;
                         }
                     }
                 }
+            } else {
+                logAcoes = '<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação [FILE_EDIT] ou [RUN_CMD] encontrada na resposta</div>';
             }
 
             const textoExibicao = textoSemAcoes || (acoes.length === 0 ? resposta : '');
