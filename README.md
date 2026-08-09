@@ -9,11 +9,11 @@ Extensão para Visual Studio Code — Assistente de IA com suporte a múltiplos 
 - Chat lateral integrado na barra de atividades do VS Code
 - Streaming de respostas em tempo real
 - Suporte a múltiplos providers de IA:
+  - **OpenCodeZen** (gratuito — provider recomendado do ecossistema Orun)
   - **Google Gemini** (gratuito)
   - **Groq Cloud** (gratuito)
   - **OpenRouter** (gratuito e pago)
   - **DeepSeek** (gratuito)
-  - **GitHub Models** (gratuito)
   - **Hugging Face** (gratuito)
   - **Ollama** (local)
 - Edição, criação e deleção de arquivos com permissão
@@ -66,15 +66,17 @@ Extensão para Visual Studio Code — Assistente de IA com suporte a múltiplos 
 
 > **Importante:** Mesmo os providers gratuitos exigem que você crie uma conta e gere uma API key no site deles. Ninguém usa suas chaves e você não usa as dos outros.
 
+> **Nota (v0.2.0):** O **GitHub Models** foi aposentado pela Microsoft (HTTP 410 brownout) e não é mais listado. Se seu provider estiver marcado como GitHub, troque para OpenCodeZen, Groq, OpenRouter ou Gemini.
+
 Após instalar, configure sua API key em **Settings** → **Extensions** → **OrunVS**:
 
 | Provider | Configuração | Gratuito? | Como obter |
 |----------|-------------|-----------|------------|
+| OpenCodeZen | `orunvs.opencodezenKey` | Sim | `https://opencode.ai` — provider recomendado do ecossistema Orun |
 | Gemini | `orunvs.geminiKey` | Sim | [Google AI Studio](https://aistudio.google.com/apikey) |
 | Groq | `orunvs.groqKey` | Sim | [Groq Cloud](https://console.groq.com) |
 | OpenRouter | `orunvs.openrouterKey` | Sim/Pago | [OpenRouter](https://openrouter.ai/keys) |
 | DeepSeek | `orunvs.deepseekKey` | Sim/Pago | [DeepSeek](https://platform.deepseek.com) |
-| GitHub | `orunvs.githubToken` | Sim | [GitHub Settings](https://github.com/settings/tokens) |
 | Hugging Face | `orunvs.huggingfaceKey` | Sim | [Hugging Face](https://huggingface.co/settings/tokens) |
 | Ollama | Nenhuma (local) | Sim | [Ollama](https://ollama.com) — roda no seu PC |
 

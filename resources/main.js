@@ -15,6 +15,7 @@
     let arquivoAtual = null;
     let contadorMsg = 0;
     let autoScroll = true;
+    let pasteContent = '';
 
     // ── LOADING SCREEN ──
     const loadingScreen = document.getElementById('loadingScreen');
@@ -76,6 +77,7 @@
         if (arquivo) msg.arquivo = arquivo;
         vscode.postMessage(msg);
         inp.value = '';
+        pasteContent = '';
         sugestao.style.display = 'none';
         if (arquivoAtual) {
             arquivoAtual = null;
@@ -92,7 +94,47 @@
     };
 
     inp.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('btn').click(); }
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (pasteContent) {
+                enviar(pasteContent, arquivoAtual);
+            } else {
+                document.getElementById('btn').click();
+            }
+        }
+    });
+
+    // ── COLAR COM COLAPSE ──
+    inp.addEventListener('paste', e => {
+        const text = (e.clipboardData || window.clipboardData).getData('text');
+        if (text && text.length > 100) {
+            e.preventDefault();
+            pasteContent = text;
+            const linhas = text.split('\n').length;
+            const chars = text.length;
+            const preview = text.slice(0, 50).replace(/\n/g, ' ');
+            inp.value = '[Colado: ' + linhas + ' linhas | ' + chars + ' caracteres] ' + preview + '...';
+            inp.title = 'Pressione Enter para enviar o conteúdo colado';
+        }
+    });
+
+    // ── COLAR COM BOTAO DIREITO ──
+    inp.addEventListener('contextmenu', e => {
+        navigator.clipboard.readText().then(text => {
+            if (text && text.length > 100) {
+                e.preventDefault();
+                pasteContent = text;
+                const linhas = text.split('\n').length;
+                const chars = text.length;
+                const preview = text.slice(0, 50).replace(/\n/g, ' ');
+                inp.value = '[Colado: ' + linhas + ' linhas | ' + chars + ' caracteres] ' + preview + '...';
+                inp.title = 'Pressione Enter para enviar o conteúdo colado';
+            } else if (text) {
+                const pos = inp.selectionStart;
+                inp.value = inp.value.slice(0, pos) + text + inp.value.slice(pos);
+                inp.selectionStart = inp.selectionEnd = pos + text.length;
+            }
+        }).catch(() => {});
     });
 
     document.getElementById('trocarBtn').onclick = () => vscode.postMessage({ type: 'trocarProvider' });
@@ -156,7 +198,7 @@
     // ── NOVA CONVERSA ──
     document.getElementById('novaTabBtn').onclick = () => vscode.postMessage({ type: 'novaConversa' });
 
-    // ── DELEGAÇÃO DE EVENTOS ──
+    // ── DELEGACAO DE EVENTOS ──
     chat.addEventListener('click', e => {
         const item = e.target.closest('.model-item');
         if (item) {
@@ -175,19 +217,16 @@
             }).catch(() => { btn.textContent = 'Erro'; });
             return;
         }
-        // Reenviar mensagem do usuario
         const msgEl = e.target.closest('.msg.user');
         if (msgEl && msgEl.dataset.indice !== undefined && msgEl.dataset.texto) {
             vscode.postMessage({ type: 'reenviarMensagem', texto: msgEl.dataset.texto, indice: parseInt(msgEl.dataset.indice) });
             return;
         }
-        // Regenerar
         const regBtn = e.target.closest('.regenerar-btn');
         if (regBtn) {
             vscode.postMessage({ type: 'regenerarUltimaResposta' });
             return;
         }
-        // Fold toggle
         const foldBtn = e.target.closest('.fold-btn');
         if (foldBtn) {
             const pre = foldBtn.parentElement;
@@ -195,7 +234,6 @@
             foldBtn.textContent = pre.classList.contains('folded') ? '+' : '\u2212';
             return;
         }
-        // Inline edit
         const editBtn = e.target.closest('.inline-edit-btn');
         if (editBtn) {
             const pre = editBtn.parentElement;
@@ -312,7 +350,7 @@
         }
     });
 
-    // ── FUNÇÕES AUXILIARES ──
+    // ── FUNCOES AUXILIARES ──
     function adicionarBotoesCopiar() {
         document.querySelectorAll('.msg pre:not(.has-copy)').forEach(pre => {
             pre.classList.add('has-copy');
@@ -387,7 +425,7 @@
         }
     });
 
-    // ── PERMISSÃO OVERLAY ──
+    // ── PERMISSAO OVERLAY ──
     document.getElementById('permPermitir').onclick = () => {
         const overlay = document.getElementById('permOverlay');
         vscode.postMessage({ type: 'respostaPermissao', id: overlay._permId, escolha: 'allow' });
@@ -403,7 +441,4 @@
         vscode.postMessage({ type: 'respostaPermissao', id: overlay._permId, escolha: 'always' });
         overlay.style.display = 'none';
     };
-
-    // ── INICIALIZA PRESETS ──
-    // (presets sao carregados via mensagem)
 })();

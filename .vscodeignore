@@ -1,6 +1,7 @@
 .vscode/**
 .vscode-test/**
-node_modules/**
+node_modules/.package-lock.json
+node_modules/@types
 src/**
 .gitignore
 .yarnrc
@@ -11,3 +12,7 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+.env
+LICENSE
+LICENSE.md
+LICENSE.txt
