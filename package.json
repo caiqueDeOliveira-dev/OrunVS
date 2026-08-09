@@ -3,7 +3,7 @@
   "displayName": "OrunVS",
   "description": "Assistente de IA para VS Code com suporte a múltiplos providers (OpenCodeZen, Gemini, Groq, OpenRouter, DeepSeek, Hugging Face, Ollama)",
   "version": "0.2.0",
-  "publisher": "OrunST",
+  "publisher": "orunst",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",

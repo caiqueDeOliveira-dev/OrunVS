@@ -17,6 +17,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - Ícone novo (LogoIA Orun) e bundle via esbuild (`npm run bundle`, ativação `onStartupFinished`)
 - **System prompt reescrito em inglês** (melhor aderência dos modelos) — mantém a identidade Hampton/Orun ST e o sistema de blocos `[FILE_EDIT]`/`[RUN_CMD]`/`[OPEN]`/etc., com foco em explorar o projeto antes de agir, autonomia com limites claros e qualidade de produção; template fixo de "barbearia" removido (o agente agora respeita o tema pedido pelo usuário)
 - **Lógica pura extraída para `src/core.ts`** (sem dependência de `vscode`) com 16 testes mocha (`npm run test:core`)
+- **Publicado no VS Code Marketplace** — publisher `orunst`, página: https://marketplace.visualstudio.com/items?itemName=orunst.orunvs
 
 ## [0.1.1] — 2026-08-08
 
