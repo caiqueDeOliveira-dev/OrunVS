@@ -17,6 +17,57 @@
     let autoScroll = true;
     let pasteContent = '';
 
+    // ── BARRA DE PROVIDER / FALLBACK ──
+    const PROVIDER_LABELS = { opencodezen: 'OpenCodeZen', openrouter: 'OpenRouter', groq: 'Groq', gemini: 'Gemini', local: 'Ollama', deepseek: 'DeepSeek', huggingface: 'Hugging Face', github: 'GitHub' };
+    const providerBar = document.getElementById('providerBar');
+    const pbLabel = document.querySelector('#providerBar .pb-label');
+    const pbDetail = document.querySelector('#providerBar .pb-detail');
+    let etaTimer = null;
+
+    function formatarEtaUI(ms) {
+        if (!ms || ms <= 0) return '';
+        const totalS = Math.max(0, Math.ceil(ms / 1000));
+        const h = Math.floor(totalS / 3600);
+        const m = Math.floor((totalS % 3600) / 60);
+        const s = totalS % 60;
+        if (h > 0) return h + 'h ' + m + 'min';
+        if (m > 0) return m + 'min ' + s + 's';
+        return s + 's';
+    }
+
+    function mostrarProviderBar(modo, label, detail, etaMs) {
+        if (!providerBar) return;
+        if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+        providerBar.classList.remove('fallback', 'err');
+        if (modo === 'err') providerBar.classList.add('err');
+        else if (modo === 'fallback') providerBar.classList.add('fallback');
+        pbLabel.textContent = label;
+        providerBar.style.display = 'flex';
+        const render = (resto) => {
+            pbDetail.textContent = (etaMs && etaMs > 0) ? (detail + ' · volta em ' + formatarEtaUI(resto)) : (detail || '');
+        };
+        if (etaMs && etaMs > 0) {
+            let resto = etaMs;
+            render(resto);
+            etaTimer = setInterval(() => {
+                resto -= 1000;
+                if (resto <= 0) {
+                    clearInterval(etaTimer);
+                    etaTimer = null;
+                    pbDetail.textContent = detail || '';
+                } else {
+                    render(resto);
+                }
+            }, 1000);
+        } else {
+            render(0);
+        }
+    }
+
+    function rotuloProvider(pid) {
+        return PROVIDER_LABELS[pid] || pid;
+    }
+
     // ── LOADING SCREEN ──
     const loadingScreen = document.getElementById('loadingScreen');
     const loadVideo = document.getElementById('loadVideo');
@@ -344,6 +395,27 @@
                 aplicarHighlight();
             } else if (data.type === 'presetsCarregados') {
                 carregarPresets(data.presets || []);
+            } else if (data.type === 'providerInfo') {
+                const v = data.value || {};
+                const ev = v.eventos || [];
+                const ultimoFallback = ev[ev.length - 1];
+                if (ultimoFallback) {
+                    mostrarProviderBar('fallback',
+                        '⚠ Fallback ativo: ' + rotuloProvider(v.ativo),
+                        'tokens de ' + rotuloProvider(ultimoFallback.de) + ' esgotados (' + (ultimoFallback.motivo || 'erro') + ') · usando ' + rotuloProvider(v.ativo) + (v.modelo ? ' (' + v.modelo + ')' : ''),
+                        ultimoFallback.etaMs);
+                } else {
+                    mostrarProviderBar('ok',
+                        '⚡ ' + rotuloProvider(v.ativo),
+                        'modelo: ' + (v.modelo || ''),
+                        null);
+                }
+            } else if (data.type === 'providerFallback') {
+                const v = data.value || {};
+                mostrarProviderBar('fallback',
+                    '⚠ Tokens de ' + rotuloProvider(v.de) + ' esgotados',
+                    'motivo: ' + (v.motivo || 'erro') + ' · usando ' + rotuloProvider(v.para) + ' automaticamente',
+                    v.etaMs);
             }
         } catch (e) {
             console.error('OrunVS msg error:', e);

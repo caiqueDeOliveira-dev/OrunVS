@@ -4,11 +4,18 @@ import {
     OPENAI_PROVIDERS,
     GEMINI_MODELS,
     GEMINI_DEFAULT_MODEL,
+    DEFAULT_FALLBACK_CHAIN,
+    FALLBACK_DEFAULT_MODELS,
     getSystemPrompt,
     parseAcoes,
     listarArquivos,
     OpenAIProvider,
     Acao,
+    extrairRetryMs,
+    classificarErro,
+    formatarEta,
+    montarCadeiaFallback,
+    CadeiaItem,
 } from '../core';
 
 describe('OPENAI_PROVIDERS', () => {
@@ -46,9 +53,168 @@ describe('OPENAI_PROVIDERS', () => {
 });
 
 describe('GEMINI_MODELS / GEMINI_DEFAULT_MODEL', () => {
-    it('default é gemini-2.0-flash e está na lista', () => {
-        assert.strictEqual(GEMINI_DEFAULT_MODEL, 'gemini-2.0-flash');
+    it('default é gemini-flash-latest (válido na API atual) e está na lista', () => {
+        assert.strictEqual(GEMINI_DEFAULT_MODEL, 'gemini-flash-latest');
         assert.ok(GEMINI_MODELS.some((m) => m.name === GEMINI_DEFAULT_MODEL));
+    });
+});
+
+describe('DEFAULT_FALLBACK_CHAIN', () => {
+    it('cadeia padrão começa com opencodezen e só contém providers válidos (não deprecated)', () => {
+        assert.deepStrictEqual(DEFAULT_FALLBACK_CHAIN, ['opencodezen', 'openrouter', 'groq', 'gemini']);
+        for (const pid of DEFAULT_FALLBACK_CHAIN) {
+            if (pid === 'gemini') continue;
+            assert.ok(OPENAI_PROVIDERS[pid as OpenAIProvider], `provider ${pid} deve existir`);
+            assert.notStrictEqual(OPENAI_PROVIDERS[pid as OpenAIProvider].deprecated, true, `${pid} não deve ser deprecated`);
+        }
+    });
+
+    it('FALLBACK_DEFAULT_MODELS cobre todos os providers da cadeia', () => {
+        for (const pid of DEFAULT_FALLBACK_CHAIN) {
+            assert.ok(FALLBACK_DEFAULT_MODELS[pid], `modelo default de fallback ausente para ${pid}`);
+        }
+        assert.strictEqual(FALLBACK_DEFAULT_MODELS.opencodezen, 'big-pickle');
+        assert.strictEqual(FALLBACK_DEFAULT_MODELS.gemini, 'gemini-flash-latest');
+    });
+});
+
+describe('extrairRetryMs', () => {
+    it('lê Retry-After em segundos', () => {
+        assert.strictEqual(extrairRetryMs(429, { 'retry-after': '45' }, null), 45000);
+    });
+
+    it('lê x-ratelimit-reset-tokens em epoch ms', () => {
+        const agora = Date.now();
+        assert.ok(Math.abs((extrairRetryMs(429, { 'x-ratelimit-reset-tokens': String(agora + 30000) }, null) ?? 0) - 30000) < 1000);
+    });
+
+    it('lê x-ratelimit-reset em segundos quando valor pequeno', () => {
+        assert.strictEqual(extrairRetryMs(429, { 'x-ratelimit-reset': '30' }, null), 30000);
+    });
+
+    it('lê mensagem de erro do corpo', () => {
+        const body = { error: { message: 'Rate limit exceeded. Please try again in 75 seconds.' } };
+        assert.strictEqual(extrairRetryMs(429, null, body), 75000);
+    });
+
+    it('retorna null sem indicação', () => {
+        assert.strictEqual(extrairRetryMs(500, null, null), null);
+    });
+});
+
+describe('classificarErro', () => {
+    it('429 → rate-limit com ETA (default do provider quando sem header)', () => {
+        const e = classificarErro({ status: 429, message: 'Too many requests' }, 'groq');
+        assert.strictEqual(e.categoria, 'rate-limit');
+        assert.strictEqual(e.etaMs, 60000);
+    });
+
+    it('429 com Retry-After → rate-limit com ETA do header', () => {
+        const e = classificarErro({ status: 429, headers: { 'retry-after': '30' }, message: 'ratelimit' }, 'opencodezen');
+        assert.strictEqual(e.categoria, 'rate-limit');
+        assert.strictEqual(e.etaMs, 30000);
+    });
+
+    it('402 → quota (sem créditos)', () => {
+        const e = classificarErro({ status: 402, message: 'Payment Required' }, 'openrouter');
+        assert.strictEqual(e.categoria, 'quota');
+    });
+
+    it('401 → auth (chave inválida)', () => {
+        const e = classificarErro({ status: 401, body: { error: { message: 'Invalid API key.' } } }, 'opencodezen');
+        assert.strictEqual(e.categoria, 'auth');
+    });
+
+    it('500 → server com ETA default', () => {
+        const e = classificarErro({ status: 500, message: 'Internal Server Error' }, 'openrouter');
+        assert.strictEqual(e.categoria, 'server');
+        assert.strictEqual(e.etaMs, 3600000);
+    });
+
+    it('erro de rede → network com ETA 30s', () => {
+        const e = classificarErro({ status: 0, message: 'fetch failed: ECONNREFUSED' }, 'groq');
+        assert.strictEqual(e.categoria, 'network');
+        assert.strictEqual(e.etaMs, 30000);
+    });
+
+    it('timeout → categoria timeout', () => {
+        const e = classificarErro({ message: 'Request timed out' }, 'opencodezen');
+        assert.strictEqual(e.categoria, 'timeout');
+        assert.strictEqual(e.etaMs, 30000);
+    });
+
+    it('AbortError → abort (NÃO deve disparar fallback)', () => {
+        const e = classificarErro({ name: 'AbortError', message: 'aborted' }, 'groq');
+        assert.strictEqual(e.categoria, 'abort');
+    });
+});
+
+describe('formatarEta', () => {
+    it('valores nulos/inválidos retornam vazio', () => {
+        assert.strictEqual(formatarEta(null), '');
+        assert.strictEqual(formatarEta(undefined), '');
+        assert.strictEqual(formatarEta(0), '');
+        assert.strictEqual(formatarEta(-5), '');
+    });
+
+    it('formata segundos', () => {
+        assert.strictEqual(formatarEta(45000), '45s');
+    });
+
+    it('formata minutos + segundos', () => {
+        assert.strictEqual(formatarEta(90000), '1min 30s');
+        assert.strictEqual(formatarEta(6120000), '1h 42min');
+    });
+
+    it('arredonda para cima', () => {
+        assert.strictEqual(formatarEta(1000), '1s');
+        assert.strictEqual(formatarEta(999), '1s');
+    });
+});
+
+describe('montarCadeiaFallback', () => {
+    const temChaveTodos = () => true;
+    const nenhumDeprecated = () => false;
+
+    it('primário primeiro, sem duplicatas', () => {
+        const cadeia = montarCadeiaFallback('opencodezen', 'big-pickle', undefined, temChaveTodos, nenhumDeprecated);
+        assert.strictEqual(cadeia[0].provider, 'opencodezen');
+        assert.strictEqual(cadeia[0].model, 'big-pickle');
+        const ids = cadeia.map((c) => c.provider);
+        assert.strictEqual(new Set(ids).size, ids.length);
+    });
+
+    it('usa FALLBACK_DEFAULT_MODELS nos providers de reserva', () => {
+        const cadeia = montarCadeiaFallback('opencodezen', 'big-pickle', undefined, temChaveTodos, nenhumDeprecated);
+        const or = cadeia.find((c) => c.provider === 'openrouter')!;
+        const gem = cadeia.find((c) => c.provider === 'gemini')!;
+        assert.strictEqual(or.model, 'openai/gpt-4o-mini');
+        assert.strictEqual(gem.model, 'gemini-flash-latest');
+        assert.strictEqual(gem.isGemini, true);
+        assert.strictEqual(or.isGemini, false);
+    });
+
+    it('pula providers sem chave', () => {
+        const temChave = (pid: string) => pid === 'opencodezen' || pid === 'groq';
+        const cadeia = montarCadeiaFallback('opencodezen', 'big-pickle', undefined, temChave, nenhumDeprecated);
+        assert.deepStrictEqual(cadeia.map((c) => c.provider), ['opencodezen', 'groq']);
+    });
+
+    it('pula providers deprecated', () => {
+        const isDep = (pid: string) => pid === 'github';
+        const cadeia = montarCadeiaFallback('opencodezen', 'big-pickle', ['github', 'groq'], temChaveTodos, isDep);
+        assert.ok(!cadeia.some((c) => c.provider === 'github'));
+        assert.ok(cadeia.some((c) => c.provider === 'groq'));
+    });
+
+    it('cadeia customizada respeita a ordem informada', () => {
+        const cadeia = montarCadeiaFallback('groq', 'llama-3.3-70b-versatile', ['openrouter', 'opencodezen'], temChaveTodos, nenhumDeprecated);
+        assert.deepStrictEqual(cadeia.map((c) => c.provider), ['groq', 'openrouter', 'opencodezen']);
+    });
+
+    it('sem chave em nenhum provider → cadeia vazia', () => {
+        const cadeia = montarCadeiaFallback('opencodezen', 'big-pickle', undefined, () => false, nenhumDeprecated);
+        assert.strictEqual(cadeia.length, 0);
     });
 });
 

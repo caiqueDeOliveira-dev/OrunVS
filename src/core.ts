@@ -100,7 +100,7 @@ export const OPENAI_PROVIDERS: Record<OpenAIProvider, ProviderConfig> = {
     },
 };
 
-export const GEMINI_DEFAULT_MODEL = 'gemini-2.0-flash';
+export const GEMINI_DEFAULT_MODEL = 'gemini-flash-latest';
 
 export const GEMINI_MODELS = [
     { name: 'gemini-2.0-flash', tier: 'free' as const },
@@ -113,6 +113,160 @@ export const GEMINI_MODELS = [
     { name: 'gemini-3.1-flash-image', tier: 'free' as const },
     { name: 'gemini-3.5-flash', tier: 'free' as const },
 ];
+
+/* ── FALLBACK AUTOMÁTICO DE PROVIDERS ── */
+
+/**
+ * Cadeia de fallback padrão: quando o provider primário esgota os tokens,
+ * a extensão tenta automaticamente o próximo da lista (apenas os validados).
+ */
+export const DEFAULT_FALLBACK_CHAIN: string[] = ['opencodezen', 'openrouter', 'groq', 'gemini'];
+
+/**
+ * Modelo usado por cada provider quando ele entra na cadeia de fallback
+ * (o provider primário usa o `modelName` configurado pelo usuário).
+ */
+export const FALLBACK_DEFAULT_MODELS: Record<string, string> = {
+    opencodezen: 'big-pickle',
+    openrouter: 'openai/gpt-4o-mini',
+    groq: 'llama-3.3-70b-versatile',
+    gemini: GEMINI_DEFAULT_MODEL,
+};
+
+/**
+ * Estimativa padrão (em ms) de quanto tempo os tokens levam para voltar,
+ * usada quando o provider não informa `Retry-After`/`x-ratelimit-reset-*`.
+ */
+export const FALLBACK_RETRY_DEFAULT_MS: Record<string, number> = {
+    opencodezen: 60_000,
+    openrouter: 3_600_000, // tier grátis do OpenRouter reseta por hora
+    groq: 60_000,          // tier grátis do Groq reseta a cada 60s
+    gemini: 60_000,
+};
+
+export type CategoriaErro = 'rate-limit' | 'quota' | 'auth' | 'server' | 'network' | 'timeout' | 'abort' | 'outro';
+
+export interface ErroClassificado {
+    categoria: CategoriaErro;
+    etaMs: number | null;
+    mensagem: string;
+}
+
+export interface CadeiaItem {
+    provider: string;
+    model: string;
+    isGemini: boolean;
+}
+
+/**
+ * Extrai o tempo de reset de tokens (ms) a partir de headers de rate-limit
+ * e/ou mensagem de erro. Retorna null quando não há indicação.
+ */
+export function extrairRetryMs(status: number, headers: any, body: any): number | null {
+    if (headers && typeof headers === 'object') {
+        const ra = headers['retry-after'] ?? headers['Retry-After'] ?? headers['retry_after'];
+        if (ra !== undefined && ra !== null && ra !== '') {
+            const n = Number(ra);
+            if (Number.isFinite(n) && n >= 0) return n * 1000;
+            const d = new Date(String(ra)).getTime();
+            if (Number.isFinite(d)) return Math.max(0, d - Date.now());
+        }
+        for (const h of ['x-ratelimit-reset-tokens', 'x-ratelimit-reset-requests', 'x-ratelimit-reset']) {
+            const v = headers[h];
+            if (v === undefined || v === null || v === '') continue;
+            const n = Number(v);
+            if (!Number.isFinite(n) || n <= 0) continue;
+            if (n > 1_000_000_000_000) return Math.max(0, n - Date.now()); // epoch ms
+            return n * 1000; // segundos
+        }
+    }
+    const msg = typeof body?.error?.message === 'string' ? body.error.message : '';
+    const m = msg.match(/(?:in|try again in|reset in|volt[ae]? em|dentro de|espera)\s+(\d+)\s*(?:s|sec|secs|second|seconds|segundo[s]?)?/i);
+    if (m) return Number(m[1]) * 1000;
+    return null;
+}
+
+/**
+ * Classifica um erro lançado por um provider para decidir se o fallback deve
+ * ocorrer e qual o tempo estimado até os tokens voltarem.
+ */
+export function classificarErro(err: any, provider: string): ErroClassificado {
+    const status = Number(err?.status ?? err?.statusCode ?? 0);
+    const headers = err?.headers || {};
+    const body = err?.body || (err?.error && typeof err.error === 'object' ? { error: err.error } : {});
+    const rawMsg = String(err?.message || '');
+    const lmsg = rawMsg.toLowerCase();
+    const lbody = String(body?.error?.message || '').toLowerCase();
+
+    if (err?.name === 'AbortError' || err?.code === 'ERR_CANCELED' || /aborted|canceled|cancelado/i.test(rawMsg)) {
+        return { categoria: 'abort', etaMs: null, mensagem: 'Requisição cancelada' };
+    }
+    if (status === 429 || /rate.?limit|too many requests|limite de tokens|quota.*exced|exced.*quota|429/i.test(lmsg + ' ' + lbody)) {
+        const etaMs = extrairRetryMs(status, headers, body) ?? FALLBACK_RETRY_DEFAULT_MS[provider] ?? 60_000;
+        return { categoria: 'rate-limit', etaMs, mensagem: 'Limite de tokens atingido' };
+    }
+    if (status === 402 || /insufficient|payment required|sem.*credito|sem.*token|credit balance/i.test(lmsg + ' ' + lbody)) {
+        return { categoria: 'quota', etaMs: null, mensagem: 'Sem créditos/tokens' };
+    }
+    if (status === 401 || status === 403 || /invalid api key|unauthorized|forbidden|api key/i.test(lmsg + ' ' + lbody)) {
+        return { categoria: 'auth', etaMs: null, mensagem: 'Chave inválida' };
+    }
+    if (status >= 500 || /internal server|bad gateway|service unavailable/i.test(lmsg)) {
+        return { categoria: 'server', etaMs: FALLBACK_RETRY_DEFAULT_MS[provider] ?? 60_000, mensagem: 'Erro no servidor' };
+    }
+    if (/timeout|timed out|took too long/i.test(lmsg)) {
+        return { categoria: 'timeout', etaMs: 30_000, mensagem: 'Tempo esgotado' };
+    }
+    if (/fetch failed|socket|network|econnrefused|econnreset|enotfound|eai_again|und_conn|connection/i.test(lmsg)) {
+        return { categoria: 'network', etaMs: 30_000, mensagem: 'Falha de rede' };
+    }
+    return { categoria: 'outro', etaMs: null, mensagem: rawMsg.slice(0, 200) || 'Erro desconhecido' };
+}
+
+/**
+ * Formata uma duração em ms para texto curto ("1h 5min", "2min 30s", "45s").
+ */
+export function formatarEta(ms: number | null | undefined): string {
+    if (!ms || !Number.isFinite(ms) || ms <= 0) return '';
+    const totalS = Math.ceil(ms / 1000);
+    const h = Math.floor(totalS / 3600);
+    const m = Math.floor((totalS % 3600) / 60);
+    const s = totalS % 60;
+    if (h > 0) return `${h}h ${m}min`;
+    if (m > 0) return `${m}min ${s}s`;
+    return `${s}s`;
+}
+
+/**
+ * Monta a cadeia efetiva de tentativas (primário primeiro), pulando providers
+ * sem chave configurada e os marcados como deprecated. O primário usa o
+ * `primaryModel`; os demais usam `FALLBACK_DEFAULT_MODELS`.
+ */
+export function montarCadeiaFallback(
+    primary: string,
+    primaryModel: string,
+    chainConfig: string[] | undefined,
+    temChave: (provider: string) => boolean,
+    isDeprecated: (provider: string) => boolean,
+): CadeiaItem[] {
+    const base = chainConfig && chainConfig.length ? chainConfig : DEFAULT_FALLBACK_CHAIN;
+    const ordem = [primary, ...base.filter((p) => p !== primary)];
+    const out: CadeiaItem[] = [];
+    const visto = new Set<string>();
+    for (const pid of ordem) {
+        if (visto.has(pid)) continue;
+        visto.add(pid);
+        if (isDeprecated(pid)) continue;
+        if (!temChave(pid)) continue;
+        const isGemini = pid === 'gemini';
+        const model = pid === primary
+            ? (primaryModel || FALLBACK_DEFAULT_MODELS[pid] || '')
+            : (FALLBACK_DEFAULT_MODELS[pid] || OPENAI_PROVIDERS[pid as OpenAIProvider]?.defaultModel || '');
+        if (!model) continue;
+        out.push({ provider: pid, model, isGemini });
+    }
+    return out;
+}
 
 export type AcaoTipo = 'EDIT' | 'CREATE' | 'DELETE' | 'RUN_CMD' | 'READ' | 'LIST' | 'OPEN';
 
@@ -290,6 +444,15 @@ Never invent facts. Never claim something works without verifying. When there ar
 
 ---
 
+## RESPONSE DISCIPLINE
+
+- NEVER open with a generic greeting like "Hello! How can I assist you today?". Go straight to work: explore, act, then summarize.
+- If the user asks you to CREATE, BUILD, FIX, REFACTOR or IMPLEMENT something: a text-only answer is a FAILURE. You MUST emit the action blocks ([FILE_EDIT]/[RUN_CMD]/[LIST_FILES]/[FILE_READ]) and actually do the work.
+- If the request is a pure question/advice ("how", "tip", "should I"): answer in text only, no actions.
+- Never show raw code in the chat text — code belongs inside [FILE_EDIT] blocks.
+
+---
+
 ## FINAL BEHAVIOR
 
 Never be just a code generator. Be an experienced team member: question internally, analyze deeply, design correctly, implement with excellence, review your own work, and ship production-ready solutions. Your goal is software that is robust, scalable, secure and maintainable — not just "working".`;
@@ -297,6 +460,20 @@ Never be just a code generator. Be an experienced team member: question internal
 export function getSystemPrompt(custom?: string): string {
     return custom && custom.trim() ? custom.trim() : DEFAULT_SYSTEM_PROMPT;
 }
+
+/**
+ * Mensagem injetada no historico quando a IA responde SEM nenhum bloco de acao
+ * a um pedido de criacao/edicao/execucao. Forca uma segunda tentativa no formato correto.
+ */
+export const FORCE_ACTIONS_PROMPT = `A sua resposta anterior NÃO continha nenhum bloco de ação ([FILE_EDIT], [RUN_CMD], [FILE_READ], [LIST_FILES]) e a tarefa pede para criar, editar, corrigir, refatorar ou executar algo.
+
+REGRAS OBRIGATÓRIAS para a nova resposta:
+1. Se a tarefa envolve criar, editar, refatorar, corrigir, construir ou rodar algo: responda APENAS com blocos de ação — [FILE_EDIT] com o conteúdo COMPLETO do arquivo, [RUN_CMD] para comandos (PowerShell), [LIST_FILES]/[FILE_READ] para explorar.
+2. NUNCA escreva código solto no chat sem salvar nos arquivos.
+3. Se a tarefa era apenas uma pergunta/dúvida, responda normalmente em texto.
+4. Não repita saudações genéricas. Vá direto ao trabalho.
+
+Reenvie a resposta completa agora.`;
 
 export function parseAcoes(texto: string): { acoes: Acao[]; textoSemAcoes: string } {
     const acoes: Acao[] = [];

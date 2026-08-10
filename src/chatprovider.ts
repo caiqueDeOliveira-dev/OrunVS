@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import MarkdownIt from 'markdown-it';
 import * as path from 'path';
 import * as fs from 'fs';
-import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao } from './core';
+import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta } from './core';
 
 
 interface ModelPick {
@@ -393,8 +393,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
 
         // migra modelos antigos removidos
-        if ((modelName === 'gemini-1.5-flash' || modelName === 'gemini-1.5-flash-8b' || modelName === 'gemini-2.0-flash-exp') && provider === 'gemini') {
-            modelName = 'gemini-2.0-flash';
+        if ((modelName === 'gemini-1.5-flash' || modelName === 'gemini-1.5-flash-8b' || modelName === 'gemini-2.0-flash-exp'
+            || modelName === 'gemini-2.0-flash' || modelName === 'gemini-2.0-flash-lite'
+            || modelName === 'gemini-2.5-flash' || modelName === 'gemini-2.5-flash-lite') && provider === 'gemini') {
+            modelName = 'gemini-flash-latest';
             await config.update('modelName', modelName, vscode.ConfigurationTarget.Global);
         }
 
@@ -457,113 +459,23 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             // limita historico a 10 turnos
             if (this._historico.length > 20) this._historico.splice(0, 2);
 
-            if (provider === 'gemini') {
-                const key = config.get<string>('geminiKey') || '';
-                if (!key) throw new Error('Configure orunvs.geminiKey nas settings');
+            resposta = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
 
-                // monta contents com historico
-                const contents: any[] = [];
-                for (const msg of this._historico) {
-                    const parts: any[] = [{ text: msg.text }];
-                    if (msg.image) {
-                        parts.push({ inlineData: { mimeType: msg.image.mimeType, data: msg.image.data } });
-                    }
-                    contents.push({ role: msg.role, parts });
-                }
-
-                // streaming Gemini
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
-                const response = await Promise.race([
-                    fetch(url, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'x-goog-api-key': key,
-                        },
-                        body: JSON.stringify({
-                            contents,
-                            systemInstruction: { parts: [{ text: getSystemPrompt(vscode.workspace.getConfiguration('orunvs').get<string>('systemPrompt') || '') }] },
-                            generationConfig: { temperature, maxOutputTokens: maxTokens },
-                        }),
-                        signal: this._abortController!.signal,
-                    }),
-                    timeout,
-                ]) as Response;
-
-                if (!response.ok) {
-                    const errBody = await response.text().catch(() => '');
-                    throw new Error(`Gemini ${response.status}: ${errBody.slice(0, 200)}`);
-                }
-
-                const reader = response.body?.getReader();
-                if (!reader) throw new Error('Response body sem reader');
-
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let textoAcumulado = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop() || '';
-                    for (const line of lines) {
-                        if (!line.startsWith('data: ')) continue;
-                        const jsonStr = line.slice(6).trim();
-                        if (!jsonStr) continue;
-                        if (jsonStr === '[DONE]') break;
-                        try {
-                            const chunk = JSON.parse(jsonStr);
-                            const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                            if (text) {
-                                textoAcumulado += text;
-                                this._mostrarStream(textoAcumulado);
-                            }
-                        } catch { /* ignora chunks malformados */ }
-                    }
-                }
-                resposta = textoAcumulado || '...';
-            } else {
-                const p = OPENAI_PROVIDERS[provider as OpenAIProvider];
-                if (!p) { throw new Error(`Provider desconhecido: ${provider}`); }
-                if (p.deprecated) {
-                    throw new Error('GitHub Models foi aposentado pela Microsoft (HTTP 410). Use outro provider: opencodezen, groq, openrouter ou gemini. Comando: OrunVS: Trocar provider de IA.');
-                }
-                const apiKey = config.get<string>(p.apiKeyField) || '';
-                if (p.apiKeyField && !apiKey) { throw new Error(`Configure ${p.apiKeyField} nas settings`); }
-                const clientOpts: any = { baseURL: p.baseURL, dangerouslyAllowBrowser: true };
-                if (apiKey) clientOpts.apiKey = apiKey;
-                const client = new OpenAI(clientOpts);
-
-                // monta messages com historico (converte 'model' → 'assistant' para OpenAI)
-                const messages: any[] = [{ role: 'system', content: getSystemPrompt(vscode.workspace.getConfiguration('orunvs').get<string>('systemPrompt') || '') }];
-                for (const msg of this._historico) {
-                    messages.push({ role: msg.role === 'model' ? 'assistant' : msg.role, content: msg.text });
-                }
-
-                // streaming OpenAI
-                const stream = await client.chat.completions.create({
-                    model: modelName,
-                    messages,
-                    stream: true,
-                    temperature,
-                    max_tokens: maxTokens,
-                }) as any;
-
-                let textoAcumulado = '';
-                for await (const chunk of stream) {
-                    const text = chunk.choices?.[0]?.delta?.content || '';
-                    if (text) {
-                        textoAcumulado += text;
-                        this._mostrarStream(textoAcumulado);
-                    }
-                }
-                resposta = textoAcumulado || '...';
+            // Auto-retry: se o pedido era de implementacao e a IA respondeu SEM nenhum bloco de acao
+            // (codigo solto no chat, saudacao generica, etc.), injeta uma mensagem forçando o formato
+            // de acoes e tenta uma segunda vez.
+            let { acoes, textoSemAcoes } = parseAcoes(resposta);
+            const pedidoImplementacao = /(crie|cria|criar|gere|gera|gerar|implemente|implementa|implementar|construa|construir|desenvolva|desenvolver|faça|fazer|monto|monte|refatore|refatora|refatorar|corrija|corrigir|arrume|arrumar|resolva|resolver|edite|editar|substitua|criar um|crie um|site|pagina|página|app|projeto|arquivo|script|código|codigo)/i.test(texto);
+            if (acoes.length === 0 && pedidoImplementacao) {
+                this._historico.push({ role: 'model', text: resposta });
+                this._historico.push({ role: 'user', text: FORCE_ACTIONS_PROMPT });
+                resposta = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
+                this._historico.pop();
+                this._historico.pop();
+                ({ acoes, textoSemAcoes } = parseAcoes(resposta));
             }
 
             // finaliza stream: substitui a msg streaming pela final
-            const { acoes, textoSemAcoes } = parseAcoes(resposta);
 
             // Debug: mostra quantos FILE_EDIT foram encontrados
             const fileEditCount = (resposta.match(/\[FILE_EDIT\]/gi) || []).length;
@@ -620,6 +532,178 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             if (this._view) this._view.webview.postMessage({ type: 'streamingTerminou' });
             this._editandoMensagem = null;
         }
+    }
+
+    /**
+     * Executa UMA chamada ao provider com fallback automático: quando o provider
+     * primário esgota tokens (429/quota/5xx/erro de rede), tenta automaticamente
+     * o próximo da cadeia (opencodezen → openrouter → groq → gemini, pulando
+     * providers sem chave). Notifica o webview do provider ativo + tempo estimado
+     * para os tokens voltarem.
+     */
+    private async _chamarModelo(provider: string, modelName: string, config: vscode.WorkspaceConfiguration, temperature: number, maxTokens: number): Promise<string> {
+        const temChave = (pid: string): boolean => {
+            if (pid === 'gemini') return !!(config.get<string>('geminiKey') || '');
+            const p = OPENAI_PROVIDERS[pid as OpenAIProvider];
+            if (!p) return false;
+            return p.apiKeyField ? !!(config.get<string>(p.apiKeyField) || '') : true;
+        };
+        const isDeprecated = (pid: string): boolean => !!OPENAI_PROVIDERS[pid as OpenAIProvider]?.deprecated;
+
+        const cadeia = montarCadeiaFallback(provider, modelName, config.get<string[]>('fallbackChain'), temChave, isDeprecated);
+        if (cadeia.length === 0) {
+            throw new Error('Nenhum provider disponível na cadeia de fallback. Verifique as chaves de API nas settings.');
+        }
+
+        const eventos: { de: string; para: string; motivo: string; etaMs: number | null }[] = [];
+        for (let i = 0; i < cadeia.length; i++) {
+            const item = cadeia[i];
+            try {
+                const texto = await this._chamarModeloUnico(item.provider, item.model, config, temperature, maxTokens);
+                this._view?.webview.postMessage({
+                    type: 'providerInfo',
+                    value: { ativo: item.provider, modelo: item.model, eventos },
+                });
+                return texto;
+            } catch (err: any) {
+                const cls = classificarErro(err, item.provider);
+                if (cls.categoria === 'abort') throw err;
+                const proximo = cadeia[i + 1];
+                eventos.push({ de: item.provider, para: proximo?.provider || '', motivo: cls.mensagem, etaMs: cls.etaMs });
+                if (proximo) {
+                    this._view?.webview.postMessage({
+                        type: 'providerFallback',
+                        value: { de: item.provider, para: proximo.provider, motivo: cls.mensagem, etaMs: cls.etaMs },
+                    });
+                }
+            }
+        }
+
+        const resumo = eventos
+            .map((e) => `${this._rotuloProvider(e.de)} (${e.motivo}${e.etaMs ? ` — volta em ~${formatarEta(e.etaMs)}` : ''})`)
+            .join(' → ');
+        throw new Error(`Todos os providers falharam. ${resumo}`);
+    }
+
+    private _rotuloProvider(provider: string): string {
+        if (provider === 'gemini') return 'Gemini';
+        return OPENAI_PROVIDERS[provider as OpenAIProvider]?.label || provider;
+    }
+
+    /**
+     * Executa UMA tentativa real de chamada ao provider (Gemini ou OpenAI-compatível)
+     * com streaming e devolve o texto completo acumulado.
+     */
+    private async _chamarModeloUnico(provider: string, modelName: string, config: vscode.WorkspaceConfiguration, temperature: number, maxTokens: number): Promise<string> {
+        const timeoutMs = 30000;
+        const timeout = new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout após 30s')), timeoutMs)
+        );
+
+        if (provider === 'gemini') {
+            const key = config.get<string>('geminiKey') || '';
+            if (!key) throw new Error('Configure orunvs.geminiKey nas settings');
+
+            // monta contents com historico
+            const contents: any[] = [];
+            for (const msg of this._historico) {
+                const parts: any[] = [{ text: msg.text }];
+                if (msg.image) {
+                    parts.push({ inlineData: { mimeType: msg.image.mimeType, data: msg.image.data } });
+                }
+                contents.push({ role: msg.role, parts });
+            }
+
+            // streaming Gemini
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
+            const response = await Promise.race([
+                fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-goog-api-key': key,
+                    },
+                    body: JSON.stringify({
+                        contents,
+                        systemInstruction: { parts: [{ text: getSystemPrompt(config.get<string>('systemPrompt') || '') }] },
+                        generationConfig: { temperature, maxOutputTokens: maxTokens },
+                    }),
+                    signal: this._abortController!.signal,
+                }),
+                timeout,
+            ]) as Response;
+
+            if (!response.ok) {
+                const errBody = await response.text().catch(() => '');
+                throw new Error(`Gemini ${response.status}: ${errBody.slice(0, 200)}`);
+            }
+
+            const reader = response.body?.getReader();
+            if (!reader) throw new Error('Response body sem reader');
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let textoAcumulado = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const jsonStr = line.slice(6).trim();
+                    if (!jsonStr) continue;
+                    if (jsonStr === '[DONE]') break;
+                    try {
+                        const chunk = JSON.parse(jsonStr);
+                        const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                        if (text) {
+                            textoAcumulado += text;
+                            this._mostrarStream(textoAcumulado);
+                        }
+                    } catch { /* ignora chunks malformados */ }
+                }
+            }
+            return textoAcumulado || '...';
+        }
+
+        const p = OPENAI_PROVIDERS[provider as OpenAIProvider];
+        if (!p) { throw new Error(`Provider desconhecido: ${provider}`); }
+        if (p.deprecated) {
+            throw new Error('GitHub Models foi aposentado pela Microsoft (HTTP 410). Use outro provider: opencodezen, groq, openrouter ou gemini. Comando: OrunVS: Trocar provider de IA.');
+        }
+        const apiKey = config.get<string>(p.apiKeyField) || '';
+        if (p.apiKeyField && !apiKey) { throw new Error(`Configure ${p.apiKeyField} nas settings`); }
+        const clientOpts: any = { baseURL: p.baseURL, dangerouslyAllowBrowser: true };
+        if (apiKey) clientOpts.apiKey = apiKey;
+        const client = new OpenAI(clientOpts);
+
+        // monta messages com historico (converte 'model' → 'assistant' para OpenAI)
+        const messages: any[] = [{ role: 'system', content: getSystemPrompt(config.get<string>('systemPrompt') || '') }];
+        for (const msg of this._historico) {
+            messages.push({ role: msg.role === 'model' ? 'assistant' : msg.role, content: msg.text });
+        }
+
+        // streaming OpenAI
+        const stream = await client.chat.completions.create({
+            model: modelName,
+            messages,
+            stream: true,
+            temperature,
+            max_tokens: maxTokens,
+        }) as any;
+
+        let textoAcumulado = '';
+        for await (const chunk of stream) {
+            const text = chunk.choices?.[0]?.delta?.content || '';
+            if (text) {
+                textoAcumulado += text;
+                this._mostrarStream(textoAcumulado);
+            }
+        }
+        return textoAcumulado || '...';
     }
 
     private _mostrarStream(markdownText: string) {
@@ -838,6 +922,32 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         box-shadow:0 2px 12px #ff1a1a66; transform:translateY(-1px);
     }
     #trocarBtn:active { transform:translateY(0); }
+
+    /* ── BARRA DE PROVIDER / FALLBACK ── */
+    #providerBar {
+        display:none; align-items:center; gap:6px;
+        padding:4px 10px; font-size:10px; color:#66ff88;
+        background:#040f06; border-bottom:1px solid #003311;
+        flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    #providerBar.fallback {
+        color:#ffcc66; background:#100c02; border-bottom:1px solid #332200;
+    }
+    #providerBar.err {
+        color:#ff7777; background:#120404; border-bottom:1px solid #330000;
+    }
+    #providerBar .pb-label {
+        font-weight:700; letter-spacing:0.5px; flex-shrink:0;
+    }
+    #providerBar .pb-dot {
+        width:7px; height:7px; border-radius:50%; flex-shrink:0;
+        background:#00cc44; box-shadow:0 0 6px #00cc44;
+    }
+    #providerBar.fallback .pb-dot { background:#ffaa00; box-shadow:0 0 6px #ffaa00; }
+    #providerBar.err .pb-dot { background:#ff4444; box-shadow:0 0 6px #ff4444; }
+    #providerBar .pb-detail {
+        color:#888; overflow:hidden; text-overflow:ellipsis; flex:1;
+    }
 
     #chat {
         position:relative; z-index:1;
@@ -1159,6 +1269,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 </div>
 
 <button id="stopBtn">⏹ Parar</button>
+
+<div id="providerBar"><span class="pb-dot"></span><span class="pb-label"></span><span class="pb-detail"></span></div>
 
 <div id="editIndicator">✏️ Editando mensagem <span id="editPreview"></span><button id="cancelarEdicao">Cancelar</button></div>
 

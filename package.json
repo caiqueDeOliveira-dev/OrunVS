@@ -2,7 +2,7 @@
   "name": "orunvs",
   "displayName": "OrunVS",
   "description": "Assistente de IA para VS Code com suporte a múltiplos providers (OpenCodeZen, Gemini, Groq, OpenRouter, DeepSeek, Hugging Face, Ollama)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "orunst",
   "icon": "resources/icon.png",
   "repository": {
@@ -53,7 +53,11 @@
     "commands": [
       {
         "command": "orunvs.perguntar",
-        "title": "OrunVS: Fazer uma pergunta"
+        "title": "OrunVS: Fazer uma pergunta",
+        "icon": {
+          "light": "resources/orun-editor-light.svg",
+          "dark": "resources/orun-editor-dark.svg"
+        }
       },
       {
         "command": "orunvs.selecionarProvider",
@@ -73,6 +77,13 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "when": "editorTextFocus",
+          "command": "orunvs.perguntar",
+          "group": "navigation"
+        }
+      ],
       "editor/context": [
         {
           "when": "editorHasSelection",
@@ -106,8 +117,21 @@
             "huggingface",
             "opencodezen"
           ],
-          "default": "gemini",
+          "default": "opencodezen",
           "description": "Provider de IA ativo (opencodezen é o provider recomendado do ecossistema Orun)"
+        },
+        "orunvs.fallbackChain": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "opencodezen",
+            "openrouter",
+            "groq",
+            "gemini"
+          ],
+          "description": "Cadeia de fallback automático: quando o provider ativo esgota os tokens, a extensão troca para o próximo da lista sem precisar de ação manual (pula providers sem chave ou descontinuados)"
         },
         "orunvs.geminiKey": {
           "type": "string",
