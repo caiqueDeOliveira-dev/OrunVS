@@ -2,7 +2,7 @@
   "name": "orunvs",
   "displayName": "OrunVS",
   "description": "Assistente de IA para VS Code com suporte a múltiplos providers (OpenCodeZen, Gemini, Groq, OpenRouter, DeepSeek, Hugging Face, Ollama)",
-  "version": "0.3.0",
+  "version": "0.3.4",
   "publisher": "orunst",
   "icon": "resources/icon.png",
   "repository": {
@@ -218,6 +218,82 @@
             }
           ],
           "description": "Lista de presets (botões rápidos)"
+        },
+        "orunvs.memoriaHabilitada": {
+          "type": "boolean",
+          "default": true,
+          "description": "Habilita memória de longo prazo local: a IA pode salvar memorias com [MEMORY_SAVE] e memorias relevantes ao pedido são injetadas no prompt automaticamente (arquivo memorias.json no globalStorage)"
+        },
+        "orunvs.sugestoesVerificacao": {
+          "type": "boolean",
+          "default": true,
+          "description": "Depois que a IA edita/cria arquivos, sugere botões para rodar teste/lint/typecheck do projeto (a execução é sempre iniciada por você)"
+        },
+        "orunvs.mcpHabilitado": {
+          "type": "boolean",
+          "default": true,
+          "description": "Habilita ferramentas MCP (Model Context Protocol): a IA pode chamar ferramentas de servidores MCP via [MCP_CALL] com formato nomeServidor__nomeTool"
+        },
+        "orunvs.mcpAtivos": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Servidores MCP do catálogo embutido que a IA pode iniciar SOB DEMANDA (dormentes por padrão — nada é iniciado no boot). A IA só usa um servidor do catálogo se ele estiver nesta lista; os servidores sobem na primeira chamada [MCP_CALL]. Valores possíveis: git, github, context7, fetch, tavily, sequential-thinking, postgres, supabase, docker, penpot, filesystem, playwright"
+        },
+        "orunvs.tavilyKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key do Tavily (usada pelo MCP tavily do catálogo)"
+        },
+        "orunvs.postgresConnectionString": {
+          "type": "string",
+          "default": "",
+          "description": "Connection string do PostgreSQL (usada pelo MCP postgres do catálogo). Ex.: postgresql://user:pass@host:5432/db"
+        },
+        "orunvs.supabaseAccessToken": {
+          "type": "string",
+          "default": "",
+          "description": "Access token do Supabase (usado pelo MCP supabase do catálogo)"
+        },
+        "orunvs.supabaseProjectRef": {
+          "type": "string",
+          "default": "",
+          "description": "Project ref do Supabase (usado pelo MCP supabase do catálogo). Ecossistema Orun: kmfmeewibravdsxemzuj"
+        },
+        "orunvs.mcpServers": {
+          "type": "array",
+          "default": [],
+          "description": "Servidores MCP custom (stdio), sempre permitidos e iniciados sob demanda no primeiro [MCP_CALL]. Ex.: [{ name: \"penpot\", command: \"npx\", args: [\"-y\", \"mcp-remote\", \"http://localhost:4401/mcp\", \"--allow-http\"] }]. Prefira orunvs.mcpAtivos para o catálogo embutido",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Nome único do servidor (usado como prefixo nomeServidor__nomeTool)"
+              },
+              "command": {
+                "type": "string",
+                "description": "Comando executável (ex.: npx)"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Argumentos do comando"
+              },
+              "env": {
+                "type": "object",
+                "description": "Variáveis de ambiente extras do servidor"
+              }
+            },
+            "required": [
+              "name",
+              "command"
+            ]
+          }
         }
       }
     }
@@ -228,7 +304,7 @@
     "bundle": "node esbuild.js",
     "watch": "tsc -watch -p ./",
     "test": "vscode-test",
-    "test:core": "tsc -p ./ && mocha out/test/core.test.js"
+    "test:core": "tsc -p ./ && mocha out/test/core.test.js out/test/memory.test.js out/test/skills.test.js out/test/mcp.test.js out/test/mcp-catalog.test.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

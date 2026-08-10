@@ -3,7 +3,11 @@ import OpenAI from 'openai';
 import MarkdownIt from 'markdown-it';
 import * as path from 'path';
 import * as fs from 'fs';
-import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta } from './core';
+import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt } from './core';
+import { Memoria, carregarMemorias, salvarMemorias, adicionarMemoria, blocoMemoriasRelevantes } from './memory';
+import { SkillInfo, listarSkills, carregarSkill, blocoAvailableSkills } from './skills';
+import { MCPManager, MCPTool, MCPCallResult, MCPServerConfig, normalizarConfigsMCP, blocoFerramentasMCP } from './mcp';
+import { MCP_CATALOGO, buscarCatalogo, resolverCatalogoConfig, montarBlocoCatalogo } from './mcp-catalog';
 
 
 interface ModelPick {
@@ -65,8 +69,15 @@ class PermissionManager {
     reset() { this._allowAll.clear(); }
 }
 
+/** Extras opcionais passados a executarAcao para as ações de memória/skill/MCP. */
+interface ExecAcaoExtras {
+    salvarMemoria?: (chave: string, conteudo: string, tags: string[]) => void;
+    carregarSkill?: (nome: string) => string | null;
+    chamarMCP?: (tool: string, args?: Record<string, unknown>) => Promise<MCPCallResult>;
+}
 
-async function executarAcao(acao: Acao, perm: PermissionManager, pasta: string): Promise<string> {
+
+async function executarAcao(acao: Acao, perm: PermissionManager, pasta: string, extras?: ExecAcaoExtras): Promise<string> {
     switch (acao.tipo) {
         case 'EDIT':
         case 'CREATE': {
@@ -175,6 +186,29 @@ async function executarAcao(acao: Acao, perm: PermissionManager, pasta: string):
                 return `[ERRO] Nao foi possivel abrir ${acao.path}: ${e.message}`;
             }
         }
+
+        case 'MEMORY_SAVE': {
+            if (!acao.chave || !acao.conteudo) return 'Erro: MEMORY_SAVE precisa de chave e conteudo';
+            if (!extras?.salvarMemoria) return '[MEMÓRIA] persistência não disponível';
+            extras.salvarMemoria(acao.chave, acao.conteudo, acao.tags || []);
+            return `[MEMORIA SALVA] ${acao.chave}`;
+        }
+
+        case 'LOAD_SKILL': {
+            if (!acao.nome) return 'Erro: LOAD_SKILL precisa de nome';
+            if (!extras?.carregarSkill) return '[SKILL] carregamento não disponível';
+            const conteudo = extras.carregarSkill(acao.nome);
+            if (!conteudo) return `[ERRO] Skill não encontrada: ${acao.nome}`;
+            return `[SKILL CARREGADA: ${acao.nome}]\n${conteudo}`;
+        }
+
+        case 'MCP_CALL': {
+            if (!acao.mcpTool) return 'Erro: MCP_CALL precisa de tool (formato nomeServidor__nomeTool)';
+            if (!extras?.chamarMCP) return '[MCP] chamada não disponível (MCP desabilitado ou nenhum servidor configurado)';
+            const resultado = await extras.chamarMCP(acao.mcpTool, acao.mcpArgs || {});
+            if (resultado.ok) return `[MCP:${acao.mcpTool}]\n${resultado.text || '(sem texto retornado)'}`;
+            return `[ERRO MCP:${acao.mcpTool}] ${resultado.error || 'erro desconhecido'}`;
+        }
     }
 }
 
@@ -189,11 +223,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     private _abortController: AbortController | null = null;
     private _editandoMensagem: { texto: string; indice: number } | null = null;
     private _permissoesPendentes: Map<string, (escolha: 'allow' | 'deny' | 'always') => void> = new Map();
+    private _memorias: Memoria[] = [];
+    private _memoriaCaminho: string;
+    private _skills: SkillInfo[] = [];
+    private _skillCaminho: string;
+    private _mcp: MCPManager = new MCPManager();
+    private _mcpTools: MCPTool[] = [];
 
     constructor(private readonly _ctx: vscode.ExtensionContext) {
         this._perm = new PermissionManager();
         this._md = new MarkdownIt();
         this._conversas.push({ historico: [], titulo: 'Conversa 1' });
+
+        this._memoriaCaminho = path.join(this._ctx.globalStorageUri.fsPath, 'memorias.json');
+        this._skillCaminho = path.join(this._ctx.extensionUri.fsPath, 'skills');
+        try { fs.mkdirSync(this._ctx.globalStorageUri.fsPath, { recursive: true }); } catch { /* ok */ }
+        this._memorias = carregarMemorias(this._memoriaCaminho);
+        this._skills = listarSkills(this._skillCaminho);
+
         this._ctx.subscriptions.push(
             vscode.commands.registerCommand('orunvs.encontrarBugs', () => {
                 const editor = vscode.window.activeTextEditor;
@@ -348,6 +395,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                             editBuilder.replace(fullRange, data.conteudo);
                         });
                     }
+                } else if (data.type === 'rodarVerificacao') {
+                    const pasta = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
+                    if (!pasta) return;
+                    const terminal = vscode.window.createTerminal('OrunVS-Verificação');
+                    terminal.show();
+                    terminal.sendText(data.comando || '');
+                    this._mostrar(`<span style="color:#66ff88">▶ Verificação solicitada: ${data.comando}</span>`);
                 }
             } catch (e: any) {
                 console.error('[OrunVS] onDidReceiveMessage error:', e);
@@ -367,6 +421,34 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         if (modelo && this._view) {
             this._view.webview.postMessage({ type: 'sugestaoModelo', value: modelo });
         }
+    }
+
+    /**
+     * Proatividade segura: depois que a IA edita/cria arquivos, detecta os scripts de
+     * verificação do projeto (test/lint/typecheck/check/build) e oferece botões para
+     * rodá-los. A execução é sempre iniciada pelo usuário (clique no botão).
+     */
+    private _sugerirVerificacoes(acoes: Acao[], pasta: string) {
+        if (!this._view) return;
+        const config = vscode.workspace.getConfiguration('orunvs');
+        if (config.get<boolean>('sugestoesVerificacao') === false) return;
+        const editou = acoes.some((a) => a.tipo === 'EDIT' || a.tipo === 'CREATE' || a.tipo === 'DELETE');
+        if (!editou || !pasta) return;
+
+        const sugestoes: { label: string; comando: string }[] = [];
+        try {
+            const pkgPath = path.join(pasta, 'package.json');
+            if (fs.existsSync(pkgPath)) {
+                const scripts = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))?.scripts || {};
+                for (const alvo of ['test', 'lint', 'typecheck', 'check', 'build']) {
+                    if (scripts[alvo] && sugestoes.length < 3) {
+                        sugestoes.push({ label: `🧪 ${alvo}`, comando: `npm run ${alvo}` });
+                    }
+                }
+            }
+        } catch { /* package.json inválido ou sem scripts */ }
+        if (sugestoes.length === 0) return;
+        this._view.webview.postMessage({ type: 'sugestoesVerificacao', sugestoes });
     }
 
     async processarPrompt(texto: string, arquivo?: any) {
@@ -475,6 +557,21 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 ({ acoes, textoSemAcoes } = parseAcoes(resposta));
             }
 
+            // Skill-load: se a IA pediu para carregar UMA skill (e mais nada), injeta o conteudo
+            // da skill no historico e chama o modelo de novo — a skill entra no contexto ANTES
+            // do trabalho real (mesmo padrao do auto-retry de acoes). Guard: apenas 1 vez.
+            if (acoes.length === 1 && acoes[0].tipo === 'LOAD_SKILL') {
+                const conteudoSkill = carregarSkill(this._skillCaminho, acoes[0].nome || '');
+                if (conteudoSkill) {
+                    this._historico.push({ role: 'model', text: resposta });
+                    this._historico.push({ role: 'user', text: `[SKILL CARREGADO: ${acoes[0].nome}]\n\n${conteudoSkill}\n\nAgora execute o que o usuário pediu seguindo as instruções da skill.` });
+                    resposta = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
+                    this._historico.pop();
+                    this._historico.pop();
+                    ({ acoes, textoSemAcoes } = parseAcoes(resposta));
+                }
+            }
+
             // finaliza stream: substitui a msg streaming pela final
 
             // Debug: mostra quantos FILE_EDIT foram encontrados
@@ -491,17 +588,27 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta: ${pasta}</div>`;
                     logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${fileEditCount} arquivo(s) | ${runCmdCount} comando(s)</div>`;
                     for (const acao of acoes) {
-                        const resultado = await executarAcao(acao, this._perm, pasta);
-                        if (acao.tipo === 'READ' || acao.tipo === 'LIST') {
+                        const resultado = await executarAcao(acao, this._perm, pasta, {
+                            salvarMemoria: (chave, conteudo, tags) => {
+                                this._memorias = adicionarMemoria(this._memorias, chave, conteudo, tags);
+                                try { salvarMemorias(this._memoriaCaminho, this._memorias); } catch (e: any) {
+                                    console.error('[OrunVS] erro ao salvar memória:', e);
+                                }
+                            },
+                            carregarSkill: (nome) => carregarSkill(this._skillCaminho, nome),
+                            chamarMCP: async (tool, args) => this._chamarMCP(tool, args || {}),
+                        });
+                        if (acao.tipo === 'READ' || acao.tipo === 'LIST' || acao.tipo === 'LOAD_SKILL' || acao.tipo === 'MCP_CALL') {
                             resultadosLeitura += resultado + '\n\n';
                         } else {
                             const cor = resultado.includes('NEGADA') ? '#ff4444' : '#66ff66';
                             logAcoes += `<div style="font-size:11px;color:${cor}">${resultado}</div>`;
                         }
                     }
+                    this._sugerirVerificacoes(acoes, pasta);
                 }
-            } else {
-                logAcoes = `<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação encontrada</div>`;
+            } else if (pedidoImplementacao) {
+                logAcoes = `<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação encontrada (pedido de implementação)</div>`;
                 logAcoes += `<div style="color:#ff8844;font-size:11px">Tags [FILE_EDIT]: ${fileEditCount} | Tags [RUN_CMD]: ${runCmdCount}</div>`;
                 if (fileEditCount === 0 && runCmdCount === 0) {
                     logAcoes += `<div style="color:#ff4444;font-size:11px">A IA não usou blocos [FILE_EDIT] ou [RUN_CMD]. Ela gerou código no chat.</div>`;
@@ -591,6 +698,101 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * System prompt final = base (padrão ou custom) + instruções de memória/skills +
+     * memórias relevantes ao último pedido do usuário + lista de skills disponíveis.
+     */
+    private _systemPromptEnriquecido(config: vscode.WorkspaceConfiguration): string {
+        const base = getSystemPrompt(config.get<string>('systemPrompt') || '');
+        let query = '';
+        for (let i = this._historico.length - 1; i >= 0; i--) {
+            if (this._historico[i].role === 'user') { query = this._historico[i].text; break; }
+        }
+        const habilitada = config.get<boolean>('memoriaHabilitada') ?? true;
+        const memorias = habilitada ? blocoMemoriasRelevantes(this._memorias, query, 5) : '';
+        const skills = blocoAvailableSkills(this._skills);
+        const mcpHabilitado = config.get<boolean>('mcpHabilitado') ?? true;
+        const mcp = mcpHabilitado ? this._blocoMCP(config) : '';
+        return enriquecerSystemPrompt(base, { memorias, skills, mcp });
+    }
+
+    /**
+     * Bloco MCP do system prompt: ferramentas dos servidores JÁ iniciados +
+     * catálogo dormente (permitidos vs desativados). Servidores do catálogo NUNCA
+     * são iniciados no boot — só sob demanda no primeiro [MCP_CALL].
+     */
+    private _blocoMCP(config: vscode.WorkspaceConfiguration): string {
+        const ativos = this._mcpAtivos(config);
+        const rodando = blocoFerramentasMCP(this._mcpTools);
+        return montarBlocoCatalogo(rodando, ativos);
+    }
+
+    /** Ids de servidores permitidos: custom (orunvs.mcpServers) + catálogo (orunvs.mcpAtivos). */
+    private _mcpAtivos(config: vscode.WorkspaceConfiguration): string[] {
+        const custom = normalizarConfigsMCP(config.get<MCPServerConfig[]>('mcpServers')).map((s) => s.name);
+        const catalogo = config.get<string[]>('mcpAtivos') || [];
+        return Array.from(new Set([...custom, ...catalogo]));
+    }
+
+    /**
+     * Chama uma ferramenta MCP com ativação ON-DEMAND: se o servidor ainda não
+     * estiver rodando, resolve a config (catálogo ou custom) e inicia na hora.
+     * Servidores do catálogo só iniciam se estiverem na allowlist (orunvs.mcpAtivos).
+     */
+    private async _chamarMCP(tool: string, args?: Record<string, unknown>): Promise<MCPCallResult> {
+        const idx = tool.indexOf('__');
+        if (idx === -1) {
+            return { ok: false, text: '', error: `Nome de ferramenta MCP inválido: ${tool} (use nomeServidor__nomeTool)` };
+        }
+        const serverName = tool.substring(0, idx);
+        const toolName = tool.substring(idx + 2);
+        const config = vscode.workspace.getConfiguration('orunvs');
+        if ((config.get<boolean>('mcpHabilitado') ?? true) === false) {
+            return { ok: false, text: '', error: 'MCP está desabilitado (orunvs.mcpHabilitado = false)' };
+        }
+
+        const jaRodando = this._mcp.listServers().find((s) => s.name === serverName);
+        if (jaRodando && jaRodando.ready) {
+            return this._mcp.callTool(tool, args || {});
+        }
+
+        const pasta = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
+        const getSetting = (chave: string): string => config.get<string>(chave) || '';
+        const custom = normalizarConfigsMCP(config.get<MCPServerConfig[]>('mcpServers')).find((s) => s.name === serverName);
+
+        let serverConfig: MCPServerConfig | null = null;
+        if (custom) {
+            serverConfig = custom;
+        } else {
+            const entrada = buscarCatalogo(serverName);
+            if (!entrada) {
+                return { ok: false, text: '', error: `Servidor MCP não encontrado no catálogo nem em orunvs.mcpServers: ${serverName}` };
+            }
+            if (!this._mcpAtivos(config).includes(serverName)) {
+                return { ok: false, text: '', error: `Servidor MCP "${serverName}" está desativado. Ative-o em Configurações → orunvs.mcpAtivos (ex.: "${serverName}").` };
+            }
+            const resolvido = resolverCatalogoConfig(entrada, getSetting, pasta);
+            if (!resolvido.ok) {
+                return { ok: false, text: '', error: `Para usar o MCP "${serverName}" configure ${resolvido.falta} nas settings.` };
+            }
+            serverConfig = resolvido.config;
+        }
+
+        this._view?.webview.postMessage({ type: 'mcpStatus', value: { servidor: serverName, ok: true, iniciando: true } });
+        try {
+            await this._mcp.addServer(serverConfig);
+            this._mcpTools = this._mcp.getAllTools();
+            return await this._mcp.callTool(tool, args || {});
+        } catch (e: any) {
+            return { ok: false, text: '', error: `Falha ao iniciar MCP "${serverName}": ${e.message || String(e)}` };
+        }
+    }
+
+    stopMCP() {
+        this._mcp.stopAll();
+        this._mcpTools = [];
+    }
+
+    /**
      * Executa UMA tentativa real de chamada ao provider (Gemini ou OpenAI-compatível)
      * com streaming e devolve o texto completo acumulado.
      */
@@ -625,7 +827,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     },
                     body: JSON.stringify({
                         contents,
-                        systemInstruction: { parts: [{ text: getSystemPrompt(config.get<string>('systemPrompt') || '') }] },
+                        systemInstruction: { parts: [{ text: this._systemPromptEnriquecido(config) }] },
                         generationConfig: { temperature, maxOutputTokens: maxTokens },
                     }),
                     signal: this._abortController!.signal,
@@ -681,7 +883,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const client = new OpenAI(clientOpts);
 
         // monta messages com historico (converte 'model' → 'assistant' para OpenAI)
-        const messages: any[] = [{ role: 'system', content: getSystemPrompt(config.get<string>('systemPrompt') || '') }];
+        const messages: any[] = [{ role: 'system', content: this._systemPromptEnriquecido(config) }];
         for (const msg of this._historico) {
             messages.push({ role: msg.role === 'model' ? 'assistant' : msg.role, content: msg.text });
         }
@@ -1141,6 +1343,24 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     }
     .preset-btn:hover { border-color:#ff1a1a; color:#ff1a1a; background:#1a0000; }
 
+    /* ── SUGESTÕES PROATIVAS (VERIFICAÇÃO) ── */
+    #sugestoesBar {
+        display:none; align-items:center; gap:4px;
+        padding:4px 10px; flex-shrink:0; overflow-x:auto; scrollbar-width:none;
+        background:#040f06; border-bottom:1px solid #003311;
+    }
+    #sugestoesBar::before {
+        content:'Verificação'; font-size:9px; color:#3a8f5a;
+        text-transform:uppercase; letter-spacing:1px; flex-shrink:0; margin-right:2px;
+    }
+    .verif-btn {
+        background:#0a3d1a; border:1px solid #005522; color:#7dffa8;
+        border-radius:12px; padding:3px 10px; font-size:10px; cursor:pointer;
+        transition:all 0.15s; white-space:nowrap; flex-shrink:0;
+    }
+    .verif-btn:hover { border-color:#00cc44; color:#b3ffcc; background:#0a5a26; }
+    .verif-btn.done { opacity:0.5; pointer-events:none; }
+
     /* ── AUTO-SCROLL ── */
     #scrollToggle {
         display:flex; align-items:center; gap:4px;
@@ -1275,6 +1495,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 <div id="editIndicator">✏️ Editando mensagem <span id="editPreview"></span><button id="cancelarEdicao">Cancelar</button></div>
 
 <div id="presetBar"></div>
+
+<div id="sugestoesBar"></div>
 
 <div id="chat"></div>
 

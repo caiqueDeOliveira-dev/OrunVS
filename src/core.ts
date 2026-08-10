@@ -268,13 +268,18 @@ export function montarCadeiaFallback(
     return out;
 }
 
-export type AcaoTipo = 'EDIT' | 'CREATE' | 'DELETE' | 'RUN_CMD' | 'READ' | 'LIST' | 'OPEN';
+export type AcaoTipo = 'EDIT' | 'CREATE' | 'DELETE' | 'RUN_CMD' | 'READ' | 'LIST' | 'OPEN' | 'MEMORY_SAVE' | 'LOAD_SKILL' | 'MCP_CALL';
 
 export interface Acao {
     tipo: AcaoTipo;
     path?: string;
     conteudo?: string;
     comando?: string;
+    chave?: string;
+    tags?: string[];
+    nome?: string;
+    mcpTool?: string;
+    mcpArgs?: Record<string, unknown>;
 }
 
 const DEFAULT_SYSTEM_PROMPT = `# ==========================================
@@ -462,6 +467,59 @@ export function getSystemPrompt(custom?: string): string {
 }
 
 /**
+ * Instruções de memória e skills acrescentadas ao system prompt (aditivo — não altera
+ * as seções existentes, então custom prompts também recebem o bloco).
+ */
+export const MEMORIA_SKILL_INSTRUCOES = `## MEMÓRIA E SKILLS
+
+- Memorias relevantes ao pedido atual são injetadas automaticamente no inicio deste prompt (bloco "MEMÓRIAS RELEVANTES"). Use-as como contexto de longo prazo.
+- Para SALVAR uma memoria importante (decisão de arquitetura, preferencia do usuário, fato do projeto, configuração que funcionou), use:
+[MEMORY_SAVE]
+chave: projeto/nome-curto-da-memoria
+tags: projeto, dominio
+Conteudo da memoria em texto livre.
+[/MEMORY_SAVE]
+- Skills disponiveis aparecem no bloco "SKILLS DISPONÍVEIS". Se o pedido do usuário casa com uma skill, responda APENAS com:
+[LOAD_SKILL]
+nome: nome-da-skill
+[/LOAD_SKILL]
+A skill será carregada e você continua no proximo passo com as instruções completas.`;
+
+/**
+ * Instruções de ferramentas MCP acrescentadas ao system prompt (aditivo). As ferramentas
+ * MCP disponíveis aparecem no bloco "FERRAMENTAS MCP DISPONÍVEIS" injetado em tempo de
+ * chamada. Para USAR uma ferramenta MCP, responda com o bloco abaixo:
+ */
+export const MCP_INSTRUCOES = `## FERRAMENTAS MCP
+
+- Ferramentas MCP disponíveis aparecem no bloco "FERRAMENTAS MCP DISPONÍVEIS" com o formato "nomeServidor__nomeTool".
+- Para chamar uma ferramenta MCP, responda com:
+[MCP_CALL]
+tool: nomeServidor__nomeTool
+args: {"chave": "valor"}
+[/MCP_CALL]
+- O campo args é opcional (JSON). A chamada é executada e o resultado é injetado no chat.`;
+
+
+export interface ContextoExtras {
+    memorias: string;
+    skills: string;
+    mcp?: string;
+}
+
+/**
+ * Concatena o prompt base com as instruções de memória/skills e os blocos dinâmicos
+ * (memórias relevantes + skills disponíveis + ferramentas MCP). Blocos vazios são omitidos.
+ */
+export function enriquecerSystemPrompt(base: string, extras: ContextoExtras): string {
+    const blocos: string[] = [MEMORIA_SKILL_INSTRUCOES];
+    if (extras.mcp && extras.mcp.trim()) blocos.push(MCP_INSTRUCOES, extras.mcp);
+    if (extras.skills && extras.skills.trim()) blocos.push(extras.skills);
+    if (extras.memorias && extras.memorias.trim()) blocos.push(extras.memorias);
+    return `${base}\n\n${blocos.join('\n\n')}`;
+}
+
+/**
  * Mensagem injetada no historico quando a IA responde SEM nenhum bloco de acao
  * a um pedido de criacao/edicao/execucao. Forca uma segunda tentativa no formato correto.
  */
@@ -524,6 +582,52 @@ export function parseAcoes(texto: string): { acoes: Acao[]; textoSemAcoes: strin
         acoes.push({ tipo: 'OPEN', path: match[1].trim() });
     }
     limpo = limpo.replace(openRegex, '');
+
+    // Formato: [MEMORY_SAVE]\nchave: projeto/x\ntags: a, b\nconteudo...\n[/MEMORY_SAVE]
+    const memSaveBody = /\[MEMORY_SAVE\]([\s\S]*?)\[\/MEMORY_SAVE\]/gi;
+    while ((match = memSaveBody.exec(texto)) !== null) {
+        const corpo = match[1].trim();
+        const chaveM = /^chave:\s*(.+)$/im.exec(corpo);
+        const tagsM = /^tags:\s*(.+)$/im.exec(corpo);
+        const chave = chaveM ? chaveM[1].trim() : '';
+        const tags = tagsM ? tagsM[1].split(',').map((t) => t.trim()).filter(Boolean) : [];
+        const conteudo = corpo
+            .split(/\r?\n/)
+            .filter((l) => !/^chave:\s/i.test(l) && !/^tags:\s/i.test(l))
+            .join('\n')
+            .trim();
+        if (chave) acoes.push({ tipo: 'MEMORY_SAVE', chave, tags, conteudo });
+    }
+    limpo = limpo.replace(/\[MEMORY_SAVE\][\s\S]*?\[\/MEMORY_SAVE\]/gi, '');
+
+    // Formato: [LOAD_SKILL]\nnome: developer\n[/LOAD_SKILL] (aceita "nome:" ou "name:")
+    const skillRegex = /\[LOAD_SKILL\]\s*(?:nome|name):\s*(.+?)\s*\[\/LOAD_SKILL\]/gi;
+    while ((match = skillRegex.exec(texto)) !== null) {
+        acoes.push({ tipo: 'LOAD_SKILL', nome: match[1].trim() });
+    }
+    limpo = limpo.replace(/\[LOAD_SKILL\][\s\S]*?\[\/LOAD_SKILL\]/gi, '');
+
+    // Formato: [MCP_CALL]\ntool: nomeServidor__nomeTool\nargs: {"chave": "valor"}\n[/MCP_CALL]
+    const mcpRegex = /\[MCP_CALL\]([\s\S]*?)\[\/MCP_CALL\]/gi;
+    while ((match = mcpRegex.exec(texto)) !== null) {
+        const corpo = match[1].trim();
+        const toolM = /^tool:\s*(.+)$/im.exec(corpo);
+        const argsM = /^args:\s*(.+)$/im.exec(corpo);
+        const mcpTool = toolM ? toolM[1].trim() : '';
+        let mcpArgs: Record<string, unknown> | undefined;
+        if (argsM) {
+            try {
+                const parsed = JSON.parse(argsM[1].trim());
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    mcpArgs = parsed as Record<string, unknown>;
+                }
+            } catch {
+                /* args inválidos — ignora */
+            }
+        }
+        if (mcpTool) acoes.push({ tipo: 'MCP_CALL', mcpTool, mcpArgs });
+    }
+    limpo = limpo.replace(/\[MCP_CALL\][\s\S]*?\[\/MCP_CALL\]/gi, '');
 
     return { acoes, textoSemAcoes: limpo.trim() };
 }

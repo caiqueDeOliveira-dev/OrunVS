@@ -8,6 +8,32 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - Initial release
 
+## [0.3.4] — 2026-08-10
+
+- **Catálogo embutido de MCPs, todos DORMENTES por padrão** (`orunvs.mcpAtivos`, default `[]`): 12 servidores curados em `src/mcp-catalog.ts` — `git`, `github` (usa `orunvs.githubToken`), `context7`, `fetch`, `tavily` (usa `orunvs.tavilyKey`), `sequential-thinking`, `postgres` (usa `orunvs.postgresConnectionString`), `supabase` (usa `orunvs.supabaseAccessToken`/`orunvs.supabaseProjectRef`), `docker`, `penpot` (proxy `mcp-remote` → `http://localhost:4401/mcp`), `filesystem` e `playwright`. Nada é iniciado no boot
+- **Ativação ON-DEMAND**: a IA vê o catálogo no system prompt (rodando + dormentes permitidos + desativados) e só chama `[MCP_CALL]` para servidores permitidos; o processo sobe na primeira chamada (`resolverCatalogoConfig` substitui `{workspace}` e `{setting:...}`) e fica em cache para as próximas. Servidores fora da allowlist retornam erro orientativo no chat
+- **Placeholders de config**: args aceitam `{workspace}` (pasta aberta) e `{setting:orunvs.chave}`; se a setting obrigatória estiver vazia, o MCP avisa exatamente qual config preencher em vez de falhar às cegas
+- Testes novos em `src/test/mcp-catalog.test.ts` (9 testes): catálogo íntegro, ids únicos, resolução de placeholders com aviso de config faltante, montagem do bloco do prompt. **87 testes passando** (era 78)
+
+## [0.3.3] — 2026-08-10
+
+- **Suporte a MCP (Model Context Protocol)** (`orunvs.mcpHabilitado`, default `true`; `orunvs.mcpServers`, lista de `{name, command, args, env}`): o OrunVS conecta a servidores MCP via stdio (JSON-RPC 2.0, handshake `initialize` protocol `2024-11-05`) e funde as ferramentas no system prompt como `nomeServidor__nomeTool` (bloco "FERRAMENTAS MCP DISPONÍVEIS"). A IA chama uma ferramenta com o bloco `[MCP_CALL]` (campo `tool:` obrigatório + `args:` opcional em JSON) e o resultado é injetado de volta no chat. Servidores HTTP (como Penpot) usam o proxy stdio: `{ name: "penpot", command: "npx", args: ["-y", "mcp-remote", "http://localhost:4401/mcp", "--allow-http"] }`
+- **Conexão lazy + reconexão por fingerprint**: os servidores só são iniciados no primeiro prompt e são reconectados apenas quando a config `orunvs.mcpServers` muda; servidores são encerrados no `deactivate` da extensão
+- Lógica pura em `src/mcp.ts` (client stdio + manager, sem dependência de vscode — mesmo padrão de `memory.ts`/`skills.ts`)
+- Testes novos em `src/test/mcp.test.ts` (fake server stdio) + casos de `[MCP_CALL]` em `core.test.ts`: **78 testes passando** (era 62); `npm run test:core` cobre os 4 arquivos
+
+## [0.3.2] — 2026-08-10
+
+- **Memória de longo prazo local** (`orunvs.memoriaHabilitada`, default `true`): a IA pode salvar decisões/preferências com `[MEMORY_SAVE]` (bloco com `chave:` e `tags:`); memorias relevantes ao pedido são injetadas automaticamente no system prompt via escore de tokens (bloco "MEMÓRIAS RELEVANTES"). Persistência em `memorias.json` no globalStorage. Lógica pura em `src/memory.ts`
+- **Skills embutidas** (`skills/<nome>/SKILL.md`): o system prompt lista as skills disponíveis (bloco "SKILLS DISPONÍVEIS") e a IA carrega as instruções completas com `[LOAD_SKILL]` — a extensão injeta o conteúdo no contexto e chama o modelo de novo antes do trabalho real. Inclui `developer` (workflow de engenharia) e `code-review` (revisão com JSON final). Lógica pura em `src/skills.ts`
+- **Sugestões proativas de verificação** (`orunvs.sugestoesVerificacao`, default `true`): depois que a IA edita/cria/deleta arquivos, a barra de sugestões oferece botões para rodar `test`/`lint`/`typecheck`/`check`/`build` do projeto (lidos do `package.json`). A execução é sempre iniciada por você, num terminal `OrunVS-Verificação`
+- **Enriquecimento aditivo do prompt**: os blocos de memória/skills são concatenados ao system prompt (padrão ou custom) sem alterar seções existentes — `enriquecerSystemPrompt` em `src/core.ts`
+- Testes novos em `src/test/` (`memory.test.ts`, `skills.test.ts`, e casos de `parseAcoes`/`enriquecerSystemPrompt` em `core.test.ts`): **62 testes passando** (era 41); `npm run test:core` cobre os 3 arquivos
+
+## [0.3.1] — 2026-08-10
+
+- **Aviso "Nenhuma ação encontrada" só aparece em pedidos de implementação**: respostas normais de conversa (pergunta, saudação, explicação) não mostram mais o alerta de `[FILE_EDIT]`/`[RUN_CMD]` no chat
+
 ## [0.3.0] — 2026-08-10
 
 - **Fallback automático de provider**: quando o provider ativo esgota os tokens (429/402/5xx/timeout/falha de rede), a extensão troca automaticamente para o próximo da cadeia configurável `orunvs.fallbackChain` (default `opencodezen → openrouter → groq → gemini`), pulando providers sem chave ou descontinuados

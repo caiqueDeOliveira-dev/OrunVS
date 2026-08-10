@@ -16,7 +16,10 @@ import {
     formatarEta,
     montarCadeiaFallback,
     CadeiaItem,
+    enriquecerSystemPrompt,
 } from '../core';
+import { blocoMemoriasRelevantes } from '../memory';
+import { blocoAvailableSkills } from '../skills';
 
 describe('OPENAI_PROVIDERS', () => {
     it('inclui opencodezen como provider oficial', () => {
@@ -301,6 +304,133 @@ describe('parseAcoes', () => {
         const { acoes, textoSemAcoes } = parseAcoes('apenas texto normal');
         assert.strictEqual(acoes.length, 0);
         assert.strictEqual(textoSemAcoes, 'apenas texto normal');
+    });
+
+    it('extrai [MEMORY_SAVE] com chave e tags', () => {
+        const texto = `[MEMORY_SAVE]
+chave: projeto/x-verbos
+tags: arquitetura, decisao
+Preferimos destruturar direto nos params das funções.
+[/MEMORY_SAVE]`;
+        const { acoes, textoSemAcoes } = parseAcoes(texto);
+        assert.strictEqual(acoes.length, 1);
+        assert.strictEqual(acoes[0].tipo, 'MEMORY_SAVE');
+        assert.strictEqual(acoes[0].chave, 'projeto/x-verbos');
+        assert.deepStrictEqual(acoes[0].tags, ['arquitetura', 'decisao']);
+        assert.ok(acoes[0].conteudo!.includes('destruturar'));
+        assert.ok(!textoSemAcoes.includes('[MEMORY_SAVE]'));
+    });
+
+    it('descarta [MEMORY_SAVE] sem chave (chave é obrigatória) e remove o bloco do texto', () => {
+        const { acoes, textoSemAcoes } = parseAcoes('[MEMORY_SAVE]\nPrecisamos de testes.\n[/MEMORY_SAVE]');
+        assert.strictEqual(acoes.length, 0);
+        assert.ok(!textoSemAcoes.includes('[MEMORY_SAVE]'));
+    });
+
+    it('extrai [LOAD_SKILL] com nome (aceita nome: ou name:)', () => {
+        const { acoes } = parseAcoes('[LOAD_SKILL]\nnome: developer\n[/LOAD_SKILL]');
+        assert.strictEqual(acoes.length, 1);
+        assert.strictEqual(acoes[0].tipo, 'LOAD_SKILL');
+        assert.strictEqual(acoes[0].nome, 'developer');
+        const comName = parseAcoes('[LOAD_SKILL]\nname: code-review\n[/LOAD_SKILL]');
+        assert.strictEqual(comName.acoes[0].nome, 'code-review');
+    });
+
+    it('descarta [LOAD_SKILL] sem nome e mantém outros blocos intactos', () => {
+        const { acoes, textoSemAcoes } = parseAcoes('[LOAD_SKILL]\n[/LOAD_SKILL]\n[RUN_CMD]\nmkdir -p src\n[/RUN_CMD]');
+        assert.strictEqual(acoes.length, 1);
+        assert.strictEqual(acoes[0].tipo, 'RUN_CMD');
+        assert.ok(!textoSemAcoes.includes('[LOAD_SKILL]'));
+        assert.ok(!textoSemAcoes.includes('[RUN_CMD]'));
+    });
+
+    it('extrai [MCP_CALL] com tool e args JSON', () => {
+        const texto = `[MCP_CALL]
+tool: penpot__list_shapes
+args: {"pageId": "abc"}
+[/MCP_CALL]`;
+        const { acoes, textoSemAcoes } = parseAcoes(texto);
+        assert.strictEqual(acoes.length, 1);
+        assert.strictEqual(acoes[0].tipo, 'MCP_CALL');
+        assert.strictEqual(acoes[0].mcpTool, 'penpot__list_shapes');
+        assert.deepStrictEqual(acoes[0].mcpArgs, { pageId: 'abc' });
+        assert.ok(!textoSemAcoes.includes('[MCP_CALL]'));
+    });
+
+    it('extrai [MCP_CALL] sem args (opcional)', () => {
+        const { acoes } = parseAcoes('[MCP_CALL]\ntool: github__list_issues\n[/MCP_CALL]');
+        assert.strictEqual(acoes.length, 1);
+        assert.strictEqual(acoes[0].tipo, 'MCP_CALL');
+        assert.strictEqual(acoes[0].mcpTool, 'github__list_issues');
+        assert.strictEqual(acoes[0].mcpArgs, undefined);
+    });
+
+    it('descarta [MCP_CALL] sem tool (obrigatória) e mantém outros blocos intactos', () => {
+        const { acoes, textoSemAcoes } = parseAcoes('[MCP_CALL]\n[/MCP_CALL]\n[RUN_CMD]\nmkdir -p src\n[/RUN_CMD]');
+        assert.strictEqual(acoes.length, 1);
+        assert.strictEqual(acoes[0].tipo, 'RUN_CMD');
+        assert.ok(!textoSemAcoes.includes('[MCP_CALL]'));
+    });
+
+    it('descarta args JSON inválidos mas mantém a tool', () => {
+        const { acoes } = parseAcoes('[MCP_CALL]\ntool: server__tool\nargs: {invalido\n[/MCP_CALL]');
+        assert.strictEqual(acoes.length, 1);
+        assert.strictEqual(acoes[0].tipo, 'MCP_CALL');
+        assert.strictEqual(acoes[0].mcpTool, 'server__tool');
+        assert.strictEqual(acoes[0].mcpArgs, undefined);
+    });
+});
+
+describe('enriquecerSystemPrompt', () => {
+    it('injeta memorias e skills no prompt base', () => {
+        const resultado = enriquecerSystemPrompt('prompt base', {
+            memorias: '## MEMÓRIAS RELEVANTES\n- x',
+            skills: '## SKILLS DISPONÍVEIS\n- [developer]',
+        });
+        assert.ok(resultado.includes('prompt base'));
+        assert.ok(resultado.includes('MEMÓRIAS RELEVANTES'));
+        assert.ok(resultado.includes('SKILLS DISPONÍVEIS'));
+    });
+
+    it('omite blocos dinâmicos vazios sem quebrar o prompt base', () => {
+        const resultado = enriquecerSystemPrompt('prompt base', { memorias: '', skills: '', mcp: '' });
+        assert.ok(resultado.includes('prompt base'));
+        assert.ok(!resultado.includes('## MEMÓRIAS RELEVANTES'));
+        assert.ok(!resultado.includes('## SKILLS DISPONÍVEIS'));
+        assert.ok(!resultado.includes('FERRAMENTAS MCP'));
+    });
+
+    it('injeta ferramentas MCP quando presentes', () => {
+        const resultado = enriquecerSystemPrompt('prompt base', {
+            memorias: '',
+            skills: '',
+            mcp: '## FERRAMENTAS MCP DISPONÍVEIS\n- **penpot__list_shapes**',
+        });
+        assert.ok(resultado.includes('prompt base'));
+        assert.ok(resultado.includes('FERRAMENTAS MCP'));
+        assert.ok(resultado.includes('penpot__list_shapes'));
+        assert.ok(resultado.includes('[MCP_CALL]'));
+    });
+
+    it('blocoMemoriasRelevantes cria bloco markdown com instruções', () => {
+        const bloco = blocoMemoriasRelevantes(
+            [{ chave: 'k1', conteudo: 'c1', tags: [], criadaEm: '1', atualizadaEm: '1' }],
+            'k1',
+        );
+        assert.ok(bloco.includes('MEMÓRIAS RELEVANTES'));
+        assert.ok(bloco.includes('k1'));
+        assert.ok(bloco.includes('c1'));
+    });
+
+    it('blocoAvailableSkills lista skills com dica de [LOAD_SKILL]', () => {
+        const bloco = blocoAvailableSkills([
+            { nome: 'developer', descricao: 'dev', caminho: 'developer', arquivo: '' },
+            { nome: 'code-review', descricao: 'review', caminho: 'code-review', arquivo: '' },
+        ]);
+        assert.ok(bloco.includes('SKILLS DISPONÍVEIS'));
+        assert.ok(bloco.includes('developer'));
+        assert.ok(bloco.includes('code-review'));
+        assert.ok(bloco.includes('[LOAD_SKILL]'));
     });
 });
 

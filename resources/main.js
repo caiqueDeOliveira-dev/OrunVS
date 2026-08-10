@@ -341,7 +341,27 @@
             } else if (data.type === 'limparChat') {
                 chat.innerHTML = '';
                 sugestao.style.display = 'none';
+                const sb = document.getElementById('sugestoesBar');
+                if (sb) sb.style.display = 'none';
                 contadorMsg = 0;
+            } else if (data.type === 'sugestoesVerificacao') {
+                const bar = document.getElementById('sugestoesBar');
+                if (!bar) return;
+                bar.innerHTML = '';
+                for (const s of (data.sugestoes || [])) {
+                    const btn = document.createElement('button');
+                    btn.className = 'verif-btn';
+                    btn.textContent = s.label;
+                    btn.dataset.comando = s.comando;
+                    btn.onclick = () => {
+                        btn.classList.add('done');
+                        btn.textContent = '▶ Rodando...';
+                        vscode.postMessage({ type: 'rodarVerificacao', comando: s.comando });
+                    };
+                    bar.appendChild(btn);
+                }
+                bar.style.display = 'flex';
+                scrollAbaixo();
             } else if (data.type === 'sugestaoModelo') {
                 sugestao.textContent = data.value === 'modelo-r\u00e1pido'
                     ? '\uD83D\uDCA1 Parece uma pergunta conceitual \u2014 ative um modelo r\u00e1pido como gemini-2.0-flash ou gpt-4o-mini'
