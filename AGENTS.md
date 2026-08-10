@@ -1,5 +1,15 @@
 # AGENTS.md - Instruções para IA
 
+## MEMÓRIA GLOBAL DO ECOSSISTEMA ORUN
+
+O OrunVS sincroniza com a **MEMORY.md global** do ecossistema (`~/.config/opencode/MEMORY.md`, compartilhada com opencode e o desktop Orun OS):
+
+- O **Resumo atual** da memória global é injetado no system prompt de cada conversa (pequeno, ~1 KB — não injetar o arquivo inteiro).
+- Ao trocar/iniciar conversa, a sessão anterior é **registrada automaticamente** (bloco `### Sessão ...` em `## Histórico de sessões` + atualização do `## Resumo atual`), com **escrita atômica + lock** para nunca sobrescrever o opencode.
+- Comandos: **OrunVS: Registrar sessão na memória global** (manual) e **OrunVS: Mostrar memória global**.
+- Settings: `orunvs.memoriaGlobalAuto` (default true). Lógica em `src/memory-global.ts`.
+- Sempre responder em português (pt-BR). Nunca apagar o histórico do MEMORY.md.
+
 ## REGRA PRINCIPAL - CRIAÇÃO DE PROJETOS
 
 Quando o usuário pedir para criar um site, sistema, projeto ou qualquer coisa que envolva código:

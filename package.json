@@ -2,7 +2,7 @@
   "name": "orunvs",
   "displayName": "OrunVS",
   "description": "Assistente de IA para VS Code com suporte a múltiplos providers (OpenCodeZen, Gemini, Groq, OpenRouter, DeepSeek, Hugging Face, Ollama)",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "orunst",
   "icon": "resources/icon.png",
   "repository": {
@@ -74,6 +74,14 @@
       {
         "command": "orunvs.refatorarCodigo",
         "title": "OrunVS: Refatorar código selecionado"
+      },
+      {
+        "command": "orunvs.registrarSessao",
+        "title": "OrunVS: Registrar sessão na memória global (MEMORY.md)"
+      },
+      {
+        "command": "orunvs.mostrarMemoriaGlobal",
+        "title": "OrunVS: Mostrar memória global (MEMORY.md)"
       }
     ],
     "menus": {
@@ -224,6 +232,11 @@
           "default": true,
           "description": "Habilita memória de longo prazo local: a IA pode salvar memorias com [MEMORY_SAVE] e memorias relevantes ao pedido são injetadas no prompt automaticamente (arquivo memorias.json no globalStorage)"
         },
+        "orunvs.memoriaGlobalAuto": {
+          "type": "boolean",
+          "default": true,
+          "description": "Registra automaticamente a sessão no MEMORY.md global do ecossistema Orun (~/.config/opencode/MEMORY.md) quando você troca/inicia uma conversa. O resumo atual da memória global também é injetado no system prompt"
+        },
         "orunvs.sugestoesVerificacao": {
           "type": "boolean",
           "default": true,
@@ -304,7 +317,7 @@
     "bundle": "node esbuild.js",
     "watch": "tsc -watch -p ./",
     "test": "vscode-test",
-    "test:core": "tsc -p ./ && mocha out/test/core.test.js out/test/memory.test.js out/test/skills.test.js out/test/mcp.test.js out/test/mcp-catalog.test.js"
+    "test:core": "tsc -p ./ && mocha out/test/core.test.js out/test/memory.test.js out/test/memory-global.test.js out/test/skills.test.js out/test/mcp.test.js out/test/mcp-catalog.test.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

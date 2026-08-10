@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt } from './core';
 import { Memoria, carregarMemorias, salvarMemorias, adicionarMemoria, blocoMemoriasRelevantes } from './memory';
 import { SkillInfo, listarSkills, carregarSkill, blocoAvailableSkills } from './skills';
+import { caminhoMemoryMd, lerArquivo, extrairResumoAtual, blocoMemoriaGlobal, registrarSessaoGlobal, SessaoGlobal } from './memory-global';
 import { MCPManager, MCPTool, MCPCallResult, MCPServerConfig, normalizarConfigsMCP, blocoFerramentasMCP } from './mcp';
 import { MCP_CATALOGO, buscarCatalogo, resolverCatalogoConfig, montarBlocoCatalogo } from './mcp-catalog';
 
@@ -225,6 +226,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     private _permissoesPendentes: Map<string, (escolha: 'allow' | 'deny' | 'always') => void> = new Map();
     private _memorias: Memoria[] = [];
     private _memoriaCaminho: string;
+    private _memoriaGlobalCaminho: string;
+    private _resumoGlobal: string = '';
     private _skills: SkillInfo[] = [];
     private _skillCaminho: string;
     private _mcp: MCPManager = new MCPManager();
@@ -241,6 +244,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         this._memorias = carregarMemorias(this._memoriaCaminho);
         this._skills = listarSkills(this._skillCaminho);
 
+        this._memoriaGlobalCaminho = caminhoMemoryMd();
+        this._carregarResumoGlobal();
+
         this._ctx.subscriptions.push(
             vscode.commands.registerCommand('orunvs.encontrarBugs', () => {
                 const editor = vscode.window.activeTextEditor;
@@ -256,8 +262,96 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 const editor = vscode.window.activeTextEditor;
                 const selected = editor?.document.getText(editor.selection) || editor?.document.getText().slice(0, 2000) || '';
                 this.processarPrompt(`Refatore este código:\n\`\`\`\n${selected}\n\`\`\``);
-            })
+            }),
+            vscode.commands.registerCommand('orunvs.registrarSessao', () => this._registrarSessaoManual()),
+            vscode.commands.registerCommand('orunvs.mostrarMemoriaGlobal', () => this._mostrarMemoriaGlobal())
         );
+    }
+
+    /** Carrega o Resumo atual do MEMORY.md global na abertura. */
+    private _carregarResumoGlobal(): void {
+        try {
+            const conteudo = lerArquivo(this._memoriaGlobalCaminho);
+            this._resumoGlobal = extrairResumoAtual(conteudo);
+        } catch {
+            this._resumoGlobal = '';
+        }
+    }
+
+    /** Recarrega o resumo global (após escrita de sessão). */
+    private _recarregarResumoGlobal(): void {
+        this._carregarResumoGlobal();
+        if (this._view) {
+            const ok = this._resumoGlobal ? 'sincronizada' : 'vazia';
+            this._view.webview.postMessage({
+                type: 'notificacao',
+                value: `🧠 Memória global ${ok} (${this._memoriaGlobalCaminho})`,
+            });
+        }
+    }
+
+    /** Registra a conversa atual como sessão no MEMORY.md global. */
+    private _montarSessaoDaConversa(titulo?: string): SessaoGlobal {
+        const usuarios = this._historico.filter((m) => m.role === 'user' && !m.text.startsWith('[Resultados de operações]')).slice(0, 5);
+        const objetivo = usuarios.map((u) => u.text.split('\n')[0].slice(0, 120)).join(' | ') || '-';
+        const fezAcoes = this._historico.some((m) => m.role === 'model' && /\[(FILE_EDIT|FILE_CREATE|RUN_CMD|MCP_CALL)\]/i.test(m.text));
+        const pasta = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
+        const projeto = pasta ? pasta.split(/[\\/]/).pop() || '' : '';
+        const feito = fezAcoes
+            ? ['realizou ações de arquivo/comando no workspace']
+            : this._historico.length >= 2
+                ? ['conversa concluída no chat']
+                : ['conversa iniciada'];
+        return {
+            titulo: titulo || (objetivo.slice(0, 60) || 'Conversa no OrunVS'),
+            ferramenta: 'OrunVS',
+            projeto,
+            objetivo,
+            feito,
+            decisoes: [],
+            emAndamento: fezAcoes ? ['verificar resultado das ações no workspace'] : [],
+            proximos: fezAcoes ? ['revisar/validar as mudanças feitas'] : [],
+        };
+    }
+
+    private async _registrarSessaoManual(): Promise<void> {
+        const titulo = await vscode.window.showInputBox({
+            prompt: 'Título da sessão para o MEMORY.md global',
+            placeHolder: 'Ex.: Corrigi o bug do scroll no chat',
+            value: this._historico.length ? this._historico[0]?.text?.split('\n')[0]?.slice(0, 50) || '' : '',
+        });
+        if (titulo === undefined) return; // cancelado
+        const res = await registrarSessaoGlobal(this._montarSessaoDaConversa(titulo || undefined));
+        this._recarregarResumoGlobal();
+        vscode.window.showInformationMessage(res.ok ? '✅ ' + res.mensagem : '⚠ ' + res.mensagem);
+    }
+
+    /** Registro automático (fire-and-forget) da conversa que está terminando. */
+    private _registrarSessaoAutomatica(): void {
+        const habilitado = vscode.workspace.getConfiguration('orunvs').get<boolean>('memoriaGlobalAuto') ?? true;
+        if (!habilitado) return;
+        if (this._historico.length < 2) return; // conversa vazia/insuficiente
+        const sessao = this._montarSessaoDaConversa();
+        registrarSessaoGlobal(sessao).then((res) => {
+            if (res.ok) this._carregarResumoGlobal();
+        }).catch(() => { /* silencioso no automático */ });
+    }
+
+    private async _mostrarMemoriaGlobal(): Promise<void> {
+        const conteudo = lerArquivo(this._memoriaGlobalCaminho);
+        if (!conteudo.trim()) {
+            vscode.window.showInformationMessage('MEMORY.md global ainda não existe.');
+            return;
+        }
+        const doc = await this._criarDocMarkdown('MEMORY.md global (Orun)', conteudo);
+        vscode.window.showTextDocument(doc);
+    }
+
+    private async _criarDocMarkdown(nome: string, conteudo: string): Promise<vscode.TextDocument> {
+        const tmp = path.join(this._ctx.globalStorageUri.fsPath, 'memory-global-preview.md');
+        try { fs.mkdirSync(path.dirname(tmp), { recursive: true }); } catch { /* ok */ }
+        fs.writeFileSync(tmp, conteudo, 'utf-8');
+        return vscode.workspace.openTextDocument(tmp);
     }
 
     private _pedirPermissaoWebview(tipo: AcaoTipo, descricao: string, detalhe: string): Promise<'allow' | 'deny' | 'always'> {
@@ -266,7 +360,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 this._pedirPermissaoFallback(tipo, descricao, detalhe).then(resolve);
                 return;
             }
-
             const id = Date.now().toString() + Math.random().toString(36).slice(2, 8);
             this._permissoesPendentes.set(id, resolve);
 
@@ -348,6 +441,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 } else if (data.type === 'cancelarEdicao') {
                     this._editandoMensagem = null;
                 } else if (data.type === 'trocarConversa') {
+                    if (this._conversaAtual !== data.indice) this._registrarSessaoAutomatica();
                     this._conversas[this._conversaAtual] = { historico: this._historico, titulo: this._conversas[this._conversaAtual].titulo };
                     this._conversaAtual = data.indice;
                     this._historico = this._conversas[this._conversaAtual].historico;
@@ -361,6 +455,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                         })) });
                     }
                 } else if (data.type === 'novaConversa') {
+                    if (this._conversas.length > 0) this._registrarSessaoAutomatica();
                     const titulo = `Conversa ${this._conversas.length + 1}`;
                     this._conversas.push({ historico: [], titulo });
                     this._conversaAtual = this._conversas.length - 1;
@@ -709,10 +804,11 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
         const habilitada = config.get<boolean>('memoriaHabilitada') ?? true;
         const memorias = habilitada ? blocoMemoriasRelevantes(this._memorias, query, 5) : '';
+        const global = habilitada && this._resumoGlobal ? `## MEMÓRIA GLOBAL DO ECOSSISTEMA (Orun)\nEstado atual compartilhado com opencode/desktop:\n${this._resumoGlobal}` : '';
         const skills = blocoAvailableSkills(this._skills);
         const mcpHabilitado = config.get<boolean>('mcpHabilitado') ?? true;
         const mcp = mcpHabilitado ? this._blocoMCP(config) : '';
-        return enriquecerSystemPrompt(base, { memorias, skills, mcp });
+        return enriquecerSystemPrompt(base, { memorias, global, skills, mcp });
     }
 
     /**

@@ -505,17 +505,19 @@ export interface ContextoExtras {
     memorias: string;
     skills: string;
     mcp?: string;
+    global?: string;
 }
 
 /**
  * Concatena o prompt base com as instruções de memória/skills e os blocos dinâmicos
- * (memórias relevantes + skills disponíveis + ferramentas MCP). Blocos vazios são omitidos.
+ * (memórias relevantes + skills disponíveis + ferramentas MCP + memória global). Blocos vazios são omitidos.
  */
 export function enriquecerSystemPrompt(base: string, extras: ContextoExtras): string {
     const blocos: string[] = [MEMORIA_SKILL_INSTRUCOES];
     if (extras.mcp && extras.mcp.trim()) blocos.push(MCP_INSTRUCOES, extras.mcp);
     if (extras.skills && extras.skills.trim()) blocos.push(extras.skills);
     if (extras.memorias && extras.memorias.trim()) blocos.push(extras.memorias);
+    if (extras.global && extras.global.trim()) blocos.push(extras.global);
     return `${base}\n\n${blocos.join('\n\n')}`;
 }
 
