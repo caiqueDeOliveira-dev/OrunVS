@@ -6,7 +6,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
-- Initial release
+- **Fix: "fica pensando para sempre" — timeout real cobrindo o streaming** (novo `orunvs.timeoutMs`, default 120s): antes, o timeout de 30s só protegia o *fetch inicial* do Gemini — o loop de streaming do OpenAI (provider ativo, OpenCodeZen) e a leitura do SSE do Gemini não tinham limite, então um stream travado (conexão aberta sem primeiro token ou sem `[DONE]`) deixava a UI presa em "Processando..." indefinidamente. Agora o prazo cobre a resposta completa (orçamento total da cadeia de fallback em `_chamarModelo`); ao esgotar, a requisição é abortada de verdade e o erro sobe com mensagem clara. O botão **⏹ Parar** também passou a cancelar o SDK OpenAI (signal no `chat.completions.create`), não só o fetch do Gemini
+
+- **Skill `code-review` aprimorada** (qualidade de revisão, inspirada no The Agency): análise em 5 dimensões (correção/segurança/manutenibilidade/performance/testes) + edge cases, convenções e código morto; prioridade por marcador `🔴 blocker` / `🟡 sugestão` / `💭 nit` com checklist por severidade; formato de comentário por linha (título + Por quê + Sugestão com código); elogiar código bom; uma review completa por rodada; perguntar quando a intenção estiver ambígua. JSON final de revisão mantido
 
 ## [0.3.4] — 2026-08-10
 

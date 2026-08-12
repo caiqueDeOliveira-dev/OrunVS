@@ -609,11 +609,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             this._view.webview.postMessage({ type: 'respostaIAUser', value: userHtml, textoOriginal: texto });
         }
 
-        const timeoutMs = 30000;
-        const timeout = new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error('Timeout após 30s')), timeoutMs)
-        );
-
         try {
             let resposta = '';
 
@@ -757,11 +752,19 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             throw new Error('Nenhum provider disponível na cadeia de fallback. Verifique as chaves de API nas settings.');
         }
 
+        // Orçamento total de tempo para TODA a cadeia: se nenhum provider responder dentro
+        // de `orunvs.timeoutMs`, a chamada falha com mensagem clara em vez de ficar presa
+        // em "Processando..." para sempre (provider travado/stalled).
+        const timeoutMs = Math.max(10_000, config.get<number>('timeoutMs') ?? 120_000);
+        const deadline = Date.now() + timeoutMs;
+
         const eventos: { de: string; para: string; motivo: string; etaMs: number | null }[] = [];
         for (let i = 0; i < cadeia.length; i++) {
+            const restante = deadline - Date.now();
+            if (restante <= 0) break; // orçamento esgotado — não tenta mais providers
             const item = cadeia[i];
             try {
-                const texto = await this._chamarModeloUnico(item.provider, item.model, config, temperature, maxTokens);
+                const texto = await this._chamarModeloUnico(item.provider, item.model, config, temperature, maxTokens, restante);
                 this._view?.webview.postMessage({
                     type: 'providerInfo',
                     value: { ativo: item.provider, modelo: item.model, eventos },
@@ -772,7 +775,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 if (cls.categoria === 'abort') throw err;
                 const proximo = cadeia[i + 1];
                 eventos.push({ de: item.provider, para: proximo?.provider || '', motivo: cls.mensagem, etaMs: cls.etaMs });
-                if (proximo) {
+                if (proximo && deadline - Date.now() > 0) {
                     this._view?.webview.postMessage({
                         type: 'providerFallback',
                         value: { de: item.provider, para: proximo.provider, motivo: cls.mensagem, etaMs: cls.etaMs },
@@ -784,7 +787,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const resumo = eventos
             .map((e) => `${this._rotuloProvider(e.de)} (${e.motivo}${e.etaMs ? ` — volta em ~${formatarEta(e.etaMs)}` : ''})`)
             .join(' → ');
-        throw new Error(`Todos os providers falharam. ${resumo}`);
+        throw new Error(`Todos os providers falharam. ${resumo || `Nenhum provider respondeu em ${Math.round(timeoutMs / 1000)}s.`}`);
     }
 
     private _rotuloProvider(provider: string): string {
@@ -891,31 +894,65 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     /**
      * Executa UMA tentativa real de chamada ao provider (Gemini ou OpenAI-compatível)
      * com streaming e devolve o texto completo acumulado.
+     *
+     * `tempoRestanteMs` é o orçamento de tempo desta tentativa (fatia do timeout total da
+     * cadeia de fallback). Se o provider não completar a resposta dentro do prazo, a
+     * requisição é abortada DE VERDADE e sobe um erro de timeout — assim a UI nunca fica
+     * presa em "Processando..." por causa de um stream travado (conexão aberta sem tokens
+     * ou sem [DONE]). O abort do usuário (⏹ Parar) também cancela o fetch/SDK real via
+     * signal, não só a animação.
      */
-    private async _chamarModeloUnico(provider: string, modelName: string, config: vscode.WorkspaceConfiguration, temperature: number, maxTokens: number): Promise<string> {
-        const timeoutMs = 30000;
-        const timeout = new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error('Timeout após 30s')), timeoutMs)
-        );
+    private async _chamarModeloUnico(provider: string, modelName: string, config: vscode.WorkspaceConfiguration, temperature: number, maxTokens: number, tempoRestanteMs: number): Promise<string> {
+        const localController = new AbortController();
+        let estourouTimeout = false;
+        const gatilhoState: { limpar: (() => void) | null } = { limpar: null };
 
-        if (provider === 'gemini') {
-            const key = config.get<string>('geminiKey') || '';
-            if (!key) throw new Error('Configure orunvs.geminiKey nas settings');
+        // Gatilho que encerra a tentativa cedo: timeout OU cancelamento do usuário.
+        // Resolve (nunca rejeita) para não gerar unhandled rejection quando o stream vence.
+        const gatilho = new Promise<'timeout' | 'abort'>((resolve) => {
+            const timer = setTimeout(() => {
+                estourouTimeout = true;
+                localController.abort();
+                resolve('timeout');
+            }, Math.max(1, tempoRestanteMs));
 
-            // monta contents com historico
-            const contents: any[] = [];
-            for (const msg of this._historico) {
-                const parts: any[] = [{ text: msg.text }];
-                if (msg.image) {
-                    parts.push({ inlineData: { mimeType: msg.image.mimeType, data: msg.image.data } });
-                }
-                contents.push({ role: msg.role, parts });
+            const sinalUsuario = this._abortController?.signal;
+            if (sinalUsuario && sinalUsuario.aborted) {
+                clearTimeout(timer);
+                localController.abort();
+                resolve('abort');
+                return;
             }
+            const onAbort = () => {
+                clearTimeout(timer);
+                localController.abort();
+                resolve('abort');
+            };
+            if (sinalUsuario) sinalUsuario.addEventListener('abort', onAbort, { once: true });
+            gatilhoState.limpar = () => {
+                clearTimeout(timer);
+                sinalUsuario?.removeEventListener('abort', onAbort);
+            };
+        });
 
-            // streaming Gemini
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
-            const response = await Promise.race([
-                fetch(url, {
+        const executarStream = async (): Promise<string> => {
+            if (provider === 'gemini') {
+                const key = config.get<string>('geminiKey') || '';
+                if (!key) throw new Error('Configure orunvs.geminiKey nas settings');
+
+                // monta contents com historico
+                const contents: any[] = [];
+                for (const msg of this._historico) {
+                    const parts: any[] = [{ text: msg.text }];
+                    if (msg.image) {
+                        parts.push({ inlineData: { mimeType: msg.image.mimeType, data: msg.image.data } });
+                    }
+                    contents.push({ role: msg.role, parts });
+                }
+
+                // streaming Gemini
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -926,82 +963,109 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                         systemInstruction: { parts: [{ text: this._systemPromptEnriquecido(config) }] },
                         generationConfig: { temperature, maxOutputTokens: maxTokens },
                     }),
-                    signal: this._abortController!.signal,
-                }),
-                timeout,
-            ]) as Response;
+                    signal: localController.signal,
+                });
 
-            if (!response.ok) {
-                const errBody = await response.text().catch(() => '');
-                throw new Error(`Gemini ${response.status}: ${errBody.slice(0, 200)}`);
+                if (!response.ok) {
+                    const errBody = await response.text().catch(() => '');
+                    throw new Error(`Gemini ${response.status}: ${errBody.slice(0, 200)}`);
+                }
+
+                const reader = response.body?.getReader();
+                if (!reader) throw new Error('Response body sem reader');
+
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let textoAcumulado = '';
+
+                while (true) {
+                    if (localController.signal.aborted) throw new Error('Requisição cancelada');
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const jsonStr = line.slice(6).trim();
+                        if (!jsonStr) continue;
+                        if (jsonStr === '[DONE]') break;
+                        try {
+                            const chunk = JSON.parse(jsonStr);
+                            const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                            if (text) {
+                                textoAcumulado += text;
+                                this._mostrarStream(textoAcumulado);
+                            }
+                        } catch { /* ignora chunks malformados */ }
+                    }
+                }
+                return textoAcumulado || '...';
             }
 
-            const reader = response.body?.getReader();
-            if (!reader) throw new Error('Response body sem reader');
+            const p = OPENAI_PROVIDERS[provider as OpenAIProvider];
+            if (!p) { throw new Error(`Provider desconhecido: ${provider}`); }
+            if (p.deprecated) {
+                throw new Error('GitHub Models foi aposentado pela Microsoft (HTTP 410). Use outro provider: opencodezen, groq, openrouter ou gemini. Comando: OrunVS: Trocar provider de IA.');
+            }
+            const apiKey = config.get<string>(p.apiKeyField) || '';
+            if (p.apiKeyField && !apiKey) { throw new Error(`Configure ${p.apiKeyField} nas settings`); }
+            const clientOpts: any = { baseURL: p.baseURL, dangerouslyAllowBrowser: true, timeout: Math.max(1, tempoRestanteMs) };
+            if (apiKey) clientOpts.apiKey = apiKey;
+            const client = new OpenAI(clientOpts);
 
-            const decoder = new TextDecoder();
-            let buffer = '';
+            // monta messages com historico (converte 'model' → 'assistant' para OpenAI)
+            const messages: any[] = [{ role: 'system', content: this._systemPromptEnriquecido(config) }];
+            for (const msg of this._historico) {
+                messages.push({ role: msg.role === 'model' ? 'assistant' : msg.role, content: msg.text });
+            }
+
+            // streaming OpenAI — o signal liga o abort do usuário/timeout ao fetch interno do SDK
+            const stream = await client.chat.completions.create({
+                model: modelName,
+                messages,
+                stream: true,
+                temperature,
+                max_tokens: maxTokens,
+            }, { signal: localController.signal }) as any;
+
             let textoAcumulado = '';
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    const jsonStr = line.slice(6).trim();
-                    if (!jsonStr) continue;
-                    if (jsonStr === '[DONE]') break;
-                    try {
-                        const chunk = JSON.parse(jsonStr);
-                        const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                        if (text) {
-                            textoAcumulado += text;
-                            this._mostrarStream(textoAcumulado);
-                        }
-                    } catch { /* ignora chunks malformados */ }
+            for await (const chunk of stream) {
+                if (localController.signal.aborted) throw new Error('Requisição cancelada');
+                const text = chunk.choices?.[0]?.delta?.content || '';
+                if (text) {
+                    textoAcumulado += text;
+                    this._mostrarStream(textoAcumulado);
                 }
             }
             return textoAcumulado || '...';
-        }
+        };
 
-        const p = OPENAI_PROVIDERS[provider as OpenAIProvider];
-        if (!p) { throw new Error(`Provider desconhecido: ${provider}`); }
-        if (p.deprecated) {
-            throw new Error('GitHub Models foi aposentado pela Microsoft (HTTP 410). Use outro provider: opencodezen, groq, openrouter ou gemini. Comando: OrunVS: Trocar provider de IA.');
-        }
-        const apiKey = config.get<string>(p.apiKeyField) || '';
-        if (p.apiKeyField && !apiKey) { throw new Error(`Configure ${p.apiKeyField} nas settings`); }
-        const clientOpts: any = { baseURL: p.baseURL, dangerouslyAllowBrowser: true };
-        if (apiKey) clientOpts.apiKey = apiKey;
-        const client = new OpenAI(clientOpts);
+        // evita unhandled rejection do "perdedor" da corrida (o stream continua sendo
+        // abortado em background; o erro real é tratado pelo race abaixo)
+        const streamPromise = executarStream();
+        void streamPromise.catch(() => { /* tratado pelo Promise.race */ });
 
-        // monta messages com historico (converte 'model' → 'assistant' para OpenAI)
-        const messages: any[] = [{ role: 'system', content: this._systemPromptEnriquecido(config) }];
-        for (const msg of this._historico) {
-            messages.push({ role: msg.role === 'model' ? 'assistant' : msg.role, content: msg.text });
-        }
-
-        // streaming OpenAI
-        const stream = await client.chat.completions.create({
-            model: modelName,
-            messages,
-            stream: true,
-            temperature,
-            max_tokens: maxTokens,
-        }) as any;
-
-        let textoAcumulado = '';
-        for await (const chunk of stream) {
-            const text = chunk.choices?.[0]?.delta?.content || '';
-            if (text) {
-                textoAcumulado += text;
-                this._mostrarStream(textoAcumulado);
+        try {
+            const vencedor = await Promise.race([
+                streamPromise.then((texto) => ({ ok: true as const, texto })),
+                gatilho.then((motivo) => ({ ok: false as const, motivo })),
+            ]);
+            if (vencedor.ok) return vencedor.texto;
+            if (vencedor.motivo === 'abort') {
+                const e = new Error('Requisição cancelada');
+                e.name = 'AbortError';
+                throw e;
             }
+            throw new Error(`Timeout do provider ${provider} (sem resposta completa em ${Math.max(1, Math.round(tempoRestanteMs / 1000))}s)`);
+        } catch (err: any) {
+            if (estourouTimeout) {
+                throw new Error(`Timeout do provider ${provider} (sem resposta completa em ${Math.max(1, Math.round(tempoRestanteMs / 1000))}s)`);
+            }
+            throw err;
+        } finally {
+            gatilhoState.limpar?.();
         }
-        return textoAcumulado || '...';
     }
 
     private _mostrarStream(markdownText: string) {
