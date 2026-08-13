@@ -535,6 +535,35 @@ REGRAS OBRIGATÓRIAS para a nova resposta:
 
 Reenvie a resposta completa agora.`;
 
+/**
+ * Mensagem injetada quando o loop de agente esgota `orunvs.maxIteracoes` AINDA explorando
+ * (leu arquivos/pastas mas não entregou a resposta final). Força o modelo a parar de ler e
+ * responder com o que já leu — "estude o projeto" vira um resumo real em vez de um loop sem fim.
+ */
+export const SINTESE_PROMPT = `Você atingiu o número máximo de passos de exploração desta conversa. PARE de ler e NÃO use mais ações [FILE_READ], [LIST_FILES], [LOAD_SKILL] nem [MCP_CALL] neste turno.
+
+Entregue AGORA a resposta final com base em tudo o que você já leu nas etapas anteriores. Se a tarefa exige criar/editar arquivos ou rodar comandos, use os blocos [FILE_EDIT]/[RUN_CMD] normalmente — mas não explore mais nada.`;
+
+const TAGS_ACAO = ['FILE_EDIT', 'FILE_CREATE', 'FILE_DELETE', 'RUN_CMD', 'FILE_READ', 'LIST_FILES', 'OPEN', 'MEMORY_SAVE', 'LOAD_SKILL', 'MCP_CALL'];
+
+/**
+ * Remove sobras de tags de ação do texto de exibição: blocos malformados que o `parseAcoes`
+ * não conseguiu extrair (ex.: `[FILE_READ]` sem `[/FILE_READ]`), tags de abertura/fechamento
+ * soltas e linhas órfãs de campos (`path:`/`tool:`/etc.) que sobraram — evita "lixo" tipo
+ * "escrito file read" no final da resposta da IA.
+ */
+export function limparSobrasAcoes(texto: string): string {
+    let t = texto || '';
+    for (const tag of TAGS_ACAO) {
+        t = t.replace(new RegExp(`\\[${tag}\\][\\s\\S]*?\\[\\/${tag}\\]`, 'gi'), '');
+    }
+    for (const tag of TAGS_ACAO) {
+        t = t.replace(new RegExp(`\\[\\/?${tag}\\]`, 'gi'), '');
+    }
+    t = t.replace(/^\s*(?:path|nome|name|tool|args|chave|tags|comando)\s*:\s*\S[^\n]*(?=\n\s*\n|$)/gim, '');
+    return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export function parseAcoes(texto: string): { acoes: Acao[]; textoSemAcoes: string } {
     const acoes: Acao[] = [];
     let limpo = texto;

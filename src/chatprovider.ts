@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import MarkdownIt from 'markdown-it';
 import * as path from 'path';
 import * as fs from 'fs';
-import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt, ehAcaoExploratoria } from './core';
+import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, SINTESE_PROMPT, parseAcoes, listarArquivos, limparSobrasAcoes, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt, ehAcaoExploratoria } from './core';
 import { Memoria, carregarMemorias, salvarMemorias, adicionarMemoria, blocoMemoriasRelevantes } from './memory';
 import { SkillInfo, listarSkills, carregarSkill, blocoAvailableSkills } from './skills';
 import { caminhoMemoryMd, lerArquivo, extrairResumoAtual, blocoMemoriaGlobal, registrarSessaoGlobal, SessaoGlobal } from './memory-global';
@@ -547,6 +547,46 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         this._view.webview.postMessage({ type: 'sugestoesVerificacao', sugestoes });
     }
 
+    /**
+     * Executa as ações de UMA iteração do loop de agente. Devolve o texto das leituras
+     * (exploratórias) para voltar ao modelo; resultados de trabalho (edit/create/delete/cmd)
+     * vão para o log. Só imprime o cabeçalho "📋 N arquivo(s) | M comando(s)" quando há
+     * trabalho real — exploração pura (estudo) não polui o chat com "0 arquivo(s)".
+     */
+    private async _executarAcoes(acoes: Acao[], pasta: string, logLinhas: string[], iter: number): Promise<string> {
+        let leituras = '';
+        if (acoes.length === 0) return leituras;
+        if (!pasta) {
+            logLinhas.push('<div style="color:#ffaa00;font-size:11px">⚠ Abra uma pasta/workspace para executar ações</div>');
+            return leituras;
+        }
+        if (iter === 0) logLinhas.push(`<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta: ${pasta}</div>`);
+        const edits = acoes.filter((a) => a.tipo === 'EDIT' || a.tipo === 'CREATE').length;
+        const cmds = acoes.filter((a) => a.tipo === 'RUN_CMD').length;
+        if (edits + cmds > 0) {
+            logLinhas.push(`<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${edits} arquivo(s) | ${cmds} comando(s)</div>`);
+        }
+        for (const acao of acoes) {
+            const resultado = await executarAcao(acao, this._perm, pasta, {
+                salvarMemoria: (chave, conteudo, tags) => {
+                    this._memorias = adicionarMemoria(this._memorias, chave, conteudo, tags);
+                    try { salvarMemorias(this._memoriaCaminho, this._memorias); } catch (e: any) {
+                        console.error('[OrunVS] erro ao salvar memória:', e);
+                    }
+                },
+                carregarSkill: (nome) => carregarSkill(this._skillCaminho, nome),
+                chamarMCP: async (tool, args) => this._chamarMCP(tool, args || {}),
+            });
+            if (ehAcaoExploratoria(acao)) {
+                leituras += resultado + '\n\n';
+            } else {
+                const cor = resultado.includes('NEGADA') ? '#ff4444' : '#66ff66';
+                logLinhas.push(`<div style="font-size:11px;color:${cor}">${resultado}</div>`);
+            }
+        }
+        return leituras;
+    }
+
     async processarPrompt(texto: string, arquivo?: any) {
         if (!this._view) {
             try { await vscode.commands.executeCommand('workbench.view.extension.orunvs-sidebar'); } catch { /* ok */ }
@@ -639,6 +679,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             const narracoes: string[] = [];
             const respostasRaw: string[] = [];
             let iter = 0;
+            let pendenciaLeitura = false;
 
             // LOOP DE AGENTE: se a IA explorar ([FILE_READ]/[LIST_FILES]/[LOAD_SKILL]/[MCP_CALL]),
             // os resultados voltam para o modelo e ele continua até entregar o trabalho final
@@ -674,32 +715,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 // executa as acoes desta iteracao
                 let leituras = '';
                 if (acoes.length > 0) {
-                    if (!pasta) {
-                        logLinhas.push('<div style="color:#ffaa00;font-size:11px">⚠ Abra uma pasta/workspace para executar ações</div>');
-                    } else {
-                        if (iter === 0) logLinhas.push(`<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta: ${pasta}</div>`);
-                        const edits = acoes.filter((a) => a.tipo === 'EDIT' || a.tipo === 'CREATE').length;
-                        const cmds = acoes.filter((a) => a.tipo === 'RUN_CMD').length;
-                        logLinhas.push(`<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${edits} arquivo(s) | ${cmds} comando(s)</div>`);
-                        for (const acao of acoes) {
-                            const resultado = await executarAcao(acao, this._perm, pasta, {
-                                salvarMemoria: (chave, conteudo, tags) => {
-                                    this._memorias = adicionarMemoria(this._memorias, chave, conteudo, tags);
-                                    try { salvarMemorias(this._memoriaCaminho, this._memorias); } catch (e: any) {
-                                        console.error('[OrunVS] erro ao salvar memória:', e);
-                                    }
-                                },
-                                carregarSkill: (nome) => carregarSkill(this._skillCaminho, nome),
-                                chamarMCP: async (tool, args) => this._chamarMCP(tool, args || {}),
-                            });
-                            if (ehAcaoExploratoria(acao)) {
-                                leituras += resultado + '\n\n';
-                            } else {
-                                const cor = resultado.includes('NEGADA') ? '#ff4444' : '#66ff66';
-                                logLinhas.push(`<div style="font-size:11px;color:${cor}">${resultado}</div>`);
-                            }
-                        }
-                    }
+                    leituras = await this._executarAcoes(acoes, pasta, logLinhas, iter);
                 } else if (iter === 0 && pedidoImplementacao) {
                     logLinhas.push('<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação encontrada (pedido de implementação)</div>');
                     if (!(/\[(FILE_EDIT|RUN_CMD)\]/i.test(resposta))) {
@@ -709,24 +725,48 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
                 // tem leitura a devolver ao modelo → continua o loop de agente
                 if (leituras) {
+                    pendenciaLeitura = true;
                     this._historico.push({ role: 'user', text: `[Resultados de operações]\n${leituras}` });
                     continue;
                 }
 
+                pendenciaLeitura = false;
                 break; // turno final: texto e/ou acoes de trabalho concluidas
+            }
+
+            // SÍNTESE FINAL: esgotou o loop AINDA explorando (leu muito mas não respondeu) →
+            // força o modelo a parar de ler e entregar a resposta com o que já leu. Sem isso,
+            // "estude o projeto" terminava só com o aviso de limite, sem resumo nenhum.
+            if (iter >= maxIteracoes && pendenciaLeitura) {
+                this._historico.push({ role: 'user', text: SINTESE_PROMPT });
+                const respostaFinal = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
+                this._historico.pop();
+                this._historico.push({ role: 'model', text: respostaFinal });
+                respostasRaw.push(respostaFinal);
+                const { acoes: acoesFinais, textoSemAcoes } = parseAcoes(respostaFinal);
+                todasAcoes.push(...acoesFinais);
+                const narracaoFinal = limparSobrasAcoes(textoSemAcoes || '');
+                if (narracaoFinal) narracoes.push(narracaoFinal);
+                await this._executarAcoes(acoesFinais, pasta, logLinhas, maxIteracoes);
             }
 
             const debugTags = respostasRaw.join('\n');
 
-            // conteudo final: narracao limpa + blocos de arquivos gerados/editados (nao somem
-            // da tela) + log de acoes
-            let html = narracoes.length ? this._md.render(narracoes.join('\n\n')) : '';
+            // conteudo final: só a ÚLTIMA narração em destaque; as intermediárias ("Continuando
+            // o estudo...") ficam dobradas num <details> colapsado para não poluir o chat;
+            // blocos de arquivos gerados/editados + log de acoes
+            const narracaoFinal = narracoes.length ? limparSobrasAcoes(narracoes[narracoes.length - 1]) : '';
+            let html = narracaoFinal ? this._md.render(narracaoFinal) : '';
+            if (narracoes.length > 1) {
+                const corpo = narracoes.slice(0, -1).map((n) => this._md.render(limparSobrasAcoes(n))).join('');
+                html += `<details class="passos"><summary>⚙ ${narracoes.length - 1} passo(s) de exploração</summary><div class="passos-corpo">${corpo}</div></details>`;
+            }
             html += this._montarBlocosConteudo(todasAcoes);
             if (logLinhas.length) {
                 html += `<div style="margin-top:10px;border-top:1px solid #333;padding-top:6px">${logLinhas.join('')}</div>`;
             }
-            if (iter >= maxIteracoes && debugTags && /\[(FILE_READ|LIST_FILES|MCP_CALL)\]/i.test(debugTags)) {
-                html += `<div style="margin-top:8px;font-size:11px;color:#ff8844">⚠ Número máximo de passos de exploração atingido (${maxIteracoes}). Ajuste orunvs.maxIteracoes se necessário.</div>`;
+            if (iter >= maxIteracoes && pendenciaLeitura && debugTags && /\[(FILE_READ|LIST_FILES|MCP_CALL)\]/i.test(debugTags)) {
+                html += `<div style="margin-top:8px;font-size:11px;color:#888">↳ Exploração limitada a ${maxIteracoes} passos — resposta entregue com base no que já foi lido. Aumente orunvs.maxIteracoes para leituras mais profundas.</div>`;
             }
             this._mostrarStreamFinal(html);
 
@@ -1636,6 +1676,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         content:'... (clique para expandir)'; display:block;
         text-align:center; font-size:10px; color:#555; padding:4px;
     }
+
+    /* ── PASSOS DE EXPLORAÇÃO (loop de agente) ── */
+    details.passos { margin-top:8px; font-size:12px; }
+    details.passos summary { cursor:pointer; color:#888; user-select:none; padding:2px 0; }
+    details.passos summary:hover { color:#bbb; }
+    details.passos .passos-corpo { margin-top:4px; color:#999; }
+    details.passos .passos-corpo p { margin:4px 0; }
 
     /* ── BOTÃO INLINE EDIT ── */
     .inline-edit-btn {

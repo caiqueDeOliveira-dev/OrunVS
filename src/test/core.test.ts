@@ -19,6 +19,7 @@ import {
     enriquecerSystemPrompt,
     ehAcaoExploratoria,
     precisaContinuarLoop,
+    limparSobrasAcoes,
 } from '../core';
 import { blocoMemoriasRelevantes } from '../memory';
 import { blocoAvailableSkills } from '../skills';
@@ -489,5 +490,29 @@ describe('ehAcaoExploratoria / precisaContinuarLoop', () => {
         assert.ok(!precisaContinuarLoop([{ tipo: 'EDIT', path: 'a.ts', conteudo: 'x' }]));
         assert.ok(!precisaContinuarLoop([{ tipo: 'RUN_CMD', comando: 'npm test' }]));
         assert.ok(!precisaContinuarLoop([{ tipo: 'CREATE', path: 'b.ts', conteudo: 'x' }]));
+    });
+});
+
+describe('limparSobrasAcoes', () => {
+    it('remove tag de abertura sem fechamento (resto de [FILE_READ])', () => {
+        const limpo = limparSobrasAcoes('Analisei o arquivo.\n[FILE_READ]\npath: src/core.ts\n');
+        assert.ok(!limpo.includes('[FILE_READ]'));
+        assert.ok(!limpo.includes('path: src/core.ts'));
+        assert.ok(limpo.includes('Analisei o arquivo.'));
+    });
+
+    it('remove blocos completos malformados e tags soltas', () => {
+        const limpo = limparSobrasAcoes('[FILE_EDIT]\npath: a.ts\nconteudo\n[/FILE_EDIT]\nResumo final.\n[LIST_FILES]');
+        assert.ok(!limpo.includes('FILE_EDIT'));
+        assert.ok(!limpo.includes('LIST_FILES'));
+        assert.ok(!limpo.includes('[/FILE_EDIT]'));
+        assert.ok(limpo.includes('Resumo final.'));
+    });
+
+    it('preserva texto normal e colapsa linhas vazias em excesso', () => {
+        const limpo = limparSobrasAcoes('O projeto usa TypeScript.\n\n\n\n\nE Supabase.');
+        assert.ok(limpo.includes('TypeScript'));
+        assert.ok(!limpo.includes('\n\n\n\n\n'));
+        assert.strictEqual(limparSobrasAcoes(''), '');
     });
 });
