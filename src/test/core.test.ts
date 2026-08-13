@@ -20,6 +20,8 @@ import {
     ehAcaoExploratoria,
     precisaContinuarLoop,
     limparSobrasAcoes,
+    ehPedidoEstudo,
+    ehPedidoImplementacao,
 } from '../core';
 import { blocoMemoriasRelevantes } from '../memory';
 import { blocoAvailableSkills } from '../skills';
@@ -514,5 +516,29 @@ describe('limparSobrasAcoes', () => {
         assert.ok(limpo.includes('TypeScript'));
         assert.ok(!limpo.includes('\n\n\n\n\n'));
         assert.strictEqual(limparSobrasAcoes(''), '');
+    });
+});
+
+describe('ehPedidoEstudo / ehPedidoImplementacao', () => {
+    it('estudo/análise NÃO é pedido de implementação (mesmo citando "projeto")', () => {
+        assert.ok(ehPedidoEstudo('estudar o projeto'));
+        assert.ok(ehPedidoEstudo('estude o projeto a fundo'));
+        assert.ok(ehPedidoEstudo('analise o código'));
+        assert.ok(ehPedidoEstudo('explique o que faz o arquivo src/main.ts'));
+        assert.ok(ehPedidoEstudo('o que faz o sistema de sync?'));
+        assert.ok(ehPedidoEstudo('leia o README e resuma'));
+        assert.ok(ehPedidoEstudo('como funciona o login?'));
+        assert.ok(!ehPedidoImplementacao('estudar o projeto'));
+        assert.ok(!ehPedidoImplementacao('o que faz o arquivo src/core.ts?'));
+    });
+
+    it('criação/edição/correção é pedido de implementação', () => {
+        assert.ok(!ehPedidoEstudo('crie um site de vendas'));
+        assert.ok(ehPedidoImplementacao('crie um site de vendas'));
+        assert.ok(ehPedidoImplementacao('corrija o bug no login'));
+        assert.ok(ehPedidoImplementacao('refatore o código selecionado'));
+        assert.ok(ehPedidoImplementacao('crie um script para importar dados'));
+        assert.ok(ehPedidoImplementacao('gere um componente de botão'));
+        assert.ok(!ehPedidoEstudo('corrija o bug no login'));
     });
 });

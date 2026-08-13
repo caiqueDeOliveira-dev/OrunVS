@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import MarkdownIt from 'markdown-it';
 import * as path from 'path';
 import * as fs from 'fs';
-import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, SINTESE_PROMPT, parseAcoes, listarArquivos, limparSobrasAcoes, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt, ehAcaoExploratoria } from './core';
+import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, SINTESE_PROMPT, parseAcoes, listarArquivos, limparSobrasAcoes, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt, ehAcaoExploratoria, ehPedidoImplementacao } from './core';
 import { Memoria, carregarMemorias, salvarMemorias, adicionarMemoria, blocoMemoriasRelevantes } from './memory';
 import { SkillInfo, listarSkills, carregarSkill, blocoAvailableSkills } from './skills';
 import { caminhoMemoryMd, lerArquivo, extrairResumoAtual, blocoMemoriaGlobal, registrarSessaoGlobal, SessaoGlobal } from './memory-global';
@@ -670,7 +670,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             // limita historico a 10 turnos
             if (this._historico.length > 20) this._historico.splice(0, 2);
 
-            const pedidoImplementacao = /(crie|cria|criar|gere|gera|gerar|implemente|implementa|implementar|construa|construir|desenvolva|desenvolver|faça|fazer|monto|monte|refatore|refatora|refatorar|corrija|corrigir|arrume|arrumar|resolva|resolver|edite|editar|substitua|criar um|crie um|site|pagina|página|app|projeto|arquivo|script|código|codigo)/i.test(texto);
+            // Pedido de implementação = tarefa que exige blocos de ação. Pedidos de ESTUDO/análise
+            // ("estude o projeto") NÃO contam — a resposta em texto é a resposta correta e não
+            // deve disparar o auto-retry nem o aviso de "nenhuma ação encontrada".
+            const pedidoImplementacao = ehPedidoImplementacao(texto);
             const maxIteracoes = Math.max(1, config.get<number>('maxIteracoes') ?? 5);
             const pasta = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
 
@@ -718,8 +721,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     leituras = await this._executarAcoes(acoes, pasta, logLinhas, iter);
                 } else if (iter === 0 && pedidoImplementacao) {
                     logLinhas.push('<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação encontrada (pedido de implementação)</div>');
-                    if (!(/\[(FILE_EDIT|RUN_CMD)\]/i.test(resposta))) {
-                        logLinhas.push('<div style="color:#ff4444;font-size:11px">A IA não usou blocos [FILE_EDIT] ou [RUN_CMD]. Ela gerou código no chat.</div>');
+                    if (!(/\[(FILE_EDIT|RUN_CMD)\]/i.test(resposta)) && !textoSemAcoes) {
+                        logLinhas.push('<div style="color:#ff4444;font-size:11px">A IA não usou blocos [FILE_EDIT] ou [RUN_CMD] e não escreveu texto. Tente reformular o pedido.</div>');
                     }
                 }
 

@@ -674,6 +674,24 @@ export function ehAcaoExploratoria(acao: Acao): boolean {
 }
 
 /**
+ * Detecta pedidos de ESTUDO/análise ("estude o projeto", "o que faz o arquivo X", "explique o
+ * código", "leia e resuma"...). Para esses pedidos a resposta em TEXTO é a correta — não deve
+ * disparar o auto-retry que força blocos de ação nem os avisos de "nenhuma ação encontrada".
+ */
+export function ehPedidoEstudo(texto: string): boolean {
+    return /(^|\s)(estud(e|ar|a|o)\b|analis(e|ar|a)\b|explique\b|explica\b|descreva\b|descreve\b|resuma\b|resumir\b|entenda\b|entender\b|leia\b|le\b|ler\b|como funciona|como é|o que faz|o que é|relatóri|visão geral|resumo\b|revis(e|ar)\b|investigue\b|investigar\b|conheça\b|conhecer\b)/i.test(texto);
+}
+
+/**
+ * Detecta pedidos de IMPLEMENTAÇÃO (criar/editar/corrigir/refatorar/executar) que exigem blocos
+ * de ação. Pedidos de estudo/análise NUNCA contam, mesmo que citem "projeto"/"arquivo"/"código".
+ */
+export function ehPedidoImplementacao(texto: string): boolean {
+    if (ehPedidoEstudo(texto)) return false;
+    return /(crie\b|cria\b|criar\b|gere\b|gera\b|gerar\b|implemente\b|implementa\b|implementar\b|construa\b|construir\b|desenvolva\b|desenvolver\b|faça\b|fazer\b|monto\b|monte\b|refatore\b|refatora\b|refatorar\b|corrija\b|corrigir\b|arrume\b|arrumar\b|resolva\b|resolver\b|edite\b|editar\b|substitua\b|adicione\b|adicionar\b|escreva\b|escrever\b|crie um|crie uma|criar um|criar uma|faça um|faça uma|gere um|gera um|construa um|monte um)/i.test(texto);
+}
+
+/**
  * Indica se o turno deve continuar (loop de agente): houve ações exploratórias
  * cujos resultados precisam ser devolvidos ao modelo antes de encerrar.
  */
