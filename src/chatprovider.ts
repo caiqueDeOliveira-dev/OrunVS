@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import MarkdownIt from 'markdown-it';
 import * as path from 'path';
 import * as fs from 'fs';
-import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt } from './core';
+import { OPENAI_PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, getSystemPrompt, FORCE_ACTIONS_PROMPT, parseAcoes, listarArquivos, OpenAIProvider, AcaoTipo, Acao, montarCadeiaFallback, classificarErro, formatarEta, enriquecerSystemPrompt, ehAcaoExploratoria } from './core';
 import { Memoria, carregarMemorias, salvarMemorias, adicionarMemoria, blocoMemoriasRelevantes } from './memory';
 import { SkillInfo, listarSkills, carregarSkill, blocoAvailableSkills } from './skills';
 import { caminhoMemoryMd, lerArquivo, extrairResumoAtual, blocoMemoriaGlobal, registrarSessaoGlobal, SessaoGlobal } from './memory-global';
@@ -222,6 +222,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     private _conversas: { historico: Mensagem[]; titulo: string }[] = [];
     private _conversaAtual: number = 0;
     private _abortController: AbortController | null = null;
+    private _streamBase: string = '';
     private _editandoMensagem: { texto: string; indice: number } | null = null;
     private _permissoesPendentes: Map<string, (escolha: 'allow' | 'deny' | 'always') => void> = new Map();
     private _memorias: Memoria[] = [];
@@ -610,8 +611,6 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
 
         try {
-            let resposta = '';
-
             if (texto === '/model' || texto.startsWith('/model ')) {
                 if (texto.startsWith('/model ') && texto.slice(7).trim()) {
                     const nome = texto.slice(7).trim();
@@ -631,101 +630,119 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             // limita historico a 10 turnos
             if (this._historico.length > 20) this._historico.splice(0, 2);
 
-            resposta = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
-
-            // Auto-retry: se o pedido era de implementacao e a IA respondeu SEM nenhum bloco de acao
-            // (codigo solto no chat, saudacao generica, etc.), injeta uma mensagem forçando o formato
-            // de acoes e tenta uma segunda vez.
-            let { acoes, textoSemAcoes } = parseAcoes(resposta);
             const pedidoImplementacao = /(crie|cria|criar|gere|gera|gerar|implemente|implementa|implementar|construa|construir|desenvolva|desenvolver|faça|fazer|monto|monte|refatore|refatora|refatorar|corrija|corrigir|arrume|arrumar|resolva|resolver|edite|editar|substitua|criar um|crie um|site|pagina|página|app|projeto|arquivo|script|código|codigo)/i.test(texto);
-            if (acoes.length === 0 && pedidoImplementacao) {
-                this._historico.push({ role: 'model', text: resposta });
-                this._historico.push({ role: 'user', text: FORCE_ACTIONS_PROMPT });
-                resposta = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
-                this._historico.pop();
-                this._historico.pop();
-                ({ acoes, textoSemAcoes } = parseAcoes(resposta));
-            }
+            const maxIteracoes = Math.max(1, config.get<number>('maxIteracoes') ?? 5);
+            const pasta = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
 
-            // Skill-load: se a IA pediu para carregar UMA skill (e mais nada), injeta o conteudo
-            // da skill no historico e chama o modelo de novo — a skill entra no contexto ANTES
-            // do trabalho real (mesmo padrao do auto-retry de acoes). Guard: apenas 1 vez.
-            if (acoes.length === 1 && acoes[0].tipo === 'LOAD_SKILL') {
-                const conteudoSkill = carregarSkill(this._skillCaminho, acoes[0].nome || '');
-                if (conteudoSkill) {
+            const todasAcoes: Acao[] = [];
+            const logLinhas: string[] = [];
+            const narracoes: string[] = [];
+            const respostasRaw: string[] = [];
+            let iter = 0;
+
+            // LOOP DE AGENTE: se a IA explorar ([FILE_READ]/[LIST_FILES]/[LOAD_SKILL]/[MCP_CALL]),
+            // os resultados voltam para o modelo e ele continua até entregar o trabalho final
+            // (arquivos/comandos) ou uma resposta de texto. Antes o turno PARAVA após a primeira
+            // leitura — a IA "começava a codar" (explorava o projeto) e nada mais acontecia.
+            for (; iter < maxIteracoes; iter++) {
+                this._streamBase = respostasRaw.join('\n\n');
+                let resposta = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
+                respostasRaw.push(resposta);
+
+                let { acoes, textoSemAcoes } = parseAcoes(resposta);
+                todasAcoes.push(...acoes);
+                if (textoSemAcoes) narracoes.push(textoSemAcoes);
+
+                // Auto-retry: pedido de implementacao com resposta SEM nenhum bloco de acao
+                // (codigo solto no chat, saudacao generica, etc.) — injeta uma mensagem forçando
+                // o formato de acoes e tenta uma segunda vez.
+                if (iter === 0 && acoes.length === 0 && pedidoImplementacao) {
                     this._historico.push({ role: 'model', text: resposta });
-                    this._historico.push({ role: 'user', text: `[SKILL CARREGADO: ${acoes[0].nome}]\n\n${conteudoSkill}\n\nAgora execute o que o usuário pediu seguindo as instruções da skill.` });
+                    this._historico.push({ role: 'user', text: FORCE_ACTIONS_PROMPT });
                     resposta = await this._chamarModelo(provider, modelName, config, temperature, maxTokens);
                     this._historico.pop();
                     this._historico.pop();
+                    respostasRaw.push(resposta);
                     ({ acoes, textoSemAcoes } = parseAcoes(resposta));
+                    todasAcoes.push(...acoes);
+                    if (textoSemAcoes) narracoes.push(textoSemAcoes);
                 }
-            }
 
-            // finaliza stream: substitui a msg streaming pela final
+                // registra a resposta do modelo no historico (ordem correta com as leituras)
+                this._historico.push({ role: 'model', text: resposta });
 
-            // Debug: mostra quantos FILE_EDIT foram encontrados
-            const fileEditCount = (resposta.match(/\[FILE_EDIT\]/gi) || []).length;
-            const runCmdCount = (resposta.match(/\[RUN_CMD\]/gi) || []).length;
-
-            let logAcoes = '';
-            let resultadosLeitura = '';
-            if (acoes.length > 0) {
-                const pasta = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || '';
-                if (!pasta) {
-                    logAcoes = '<div style="color:#ffaa00;font-size:11px">⚠ Abra uma pasta/workspace para executar ações</div>';
-                } else {
-                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta: ${pasta}</div>`;
-                    logAcoes += `<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${fileEditCount} arquivo(s) | ${runCmdCount} comando(s)</div>`;
-                    for (const acao of acoes) {
-                        const resultado = await executarAcao(acao, this._perm, pasta, {
-                            salvarMemoria: (chave, conteudo, tags) => {
-                                this._memorias = adicionarMemoria(this._memorias, chave, conteudo, tags);
-                                try { salvarMemorias(this._memoriaCaminho, this._memorias); } catch (e: any) {
-                                    console.error('[OrunVS] erro ao salvar memória:', e);
-                                }
-                            },
-                            carregarSkill: (nome) => carregarSkill(this._skillCaminho, nome),
-                            chamarMCP: async (tool, args) => this._chamarMCP(tool, args || {}),
-                        });
-                        if (acao.tipo === 'READ' || acao.tipo === 'LIST' || acao.tipo === 'LOAD_SKILL' || acao.tipo === 'MCP_CALL') {
-                            resultadosLeitura += resultado + '\n\n';
-                        } else {
-                            const cor = resultado.includes('NEGADA') ? '#ff4444' : '#66ff66';
-                            logAcoes += `<div style="font-size:11px;color:${cor}">${resultado}</div>`;
+                // executa as acoes desta iteracao
+                let leituras = '';
+                if (acoes.length > 0) {
+                    if (!pasta) {
+                        logLinhas.push('<div style="color:#ffaa00;font-size:11px">⚠ Abra uma pasta/workspace para executar ações</div>');
+                    } else {
+                        if (iter === 0) logLinhas.push(`<div style="font-size:11px;color:#888;margin-bottom:4px">📁 Pasta: ${pasta}</div>`);
+                        const edits = acoes.filter((a) => a.tipo === 'EDIT' || a.tipo === 'CREATE').length;
+                        const cmds = acoes.filter((a) => a.tipo === 'RUN_CMD').length;
+                        logLinhas.push(`<div style="font-size:11px;color:#888;margin-bottom:4px">📋 ${edits} arquivo(s) | ${cmds} comando(s)</div>`);
+                        for (const acao of acoes) {
+                            const resultado = await executarAcao(acao, this._perm, pasta, {
+                                salvarMemoria: (chave, conteudo, tags) => {
+                                    this._memorias = adicionarMemoria(this._memorias, chave, conteudo, tags);
+                                    try { salvarMemorias(this._memoriaCaminho, this._memorias); } catch (e: any) {
+                                        console.error('[OrunVS] erro ao salvar memória:', e);
+                                    }
+                                },
+                                carregarSkill: (nome) => carregarSkill(this._skillCaminho, nome),
+                                chamarMCP: async (tool, args) => this._chamarMCP(tool, args || {}),
+                            });
+                            if (ehAcaoExploratoria(acao)) {
+                                leituras += resultado + '\n\n';
+                            } else {
+                                const cor = resultado.includes('NEGADA') ? '#ff4444' : '#66ff66';
+                                logLinhas.push(`<div style="font-size:11px;color:${cor}">${resultado}</div>`);
+                            }
                         }
                     }
-                    this._sugerirVerificacoes(acoes, pasta);
+                } else if (iter === 0 && pedidoImplementacao) {
+                    logLinhas.push('<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação encontrada (pedido de implementação)</div>');
+                    if (!(/\[(FILE_EDIT|RUN_CMD)\]/i.test(resposta))) {
+                        logLinhas.push('<div style="color:#ff4444;font-size:11px">A IA não usou blocos [FILE_EDIT] ou [RUN_CMD]. Ela gerou código no chat.</div>');
+                    }
                 }
-            } else if (pedidoImplementacao) {
-                logAcoes = `<div style="color:#ff8844;font-size:11px">⚠ Nenhuma ação encontrada (pedido de implementação)</div>`;
-                logAcoes += `<div style="color:#ff8844;font-size:11px">Tags [FILE_EDIT]: ${fileEditCount} | Tags [RUN_CMD]: ${runCmdCount}</div>`;
-                if (fileEditCount === 0 && runCmdCount === 0) {
-                    logAcoes += `<div style="color:#ff4444;font-size:11px">A IA não usou blocos [FILE_EDIT] ou [RUN_CMD]. Ela gerou código no chat.</div>`;
+
+                // tem leitura a devolver ao modelo → continua o loop de agente
+                if (leituras) {
+                    this._historico.push({ role: 'user', text: `[Resultados de operações]\n${leituras}` });
+                    continue;
                 }
+
+                break; // turno final: texto e/ou acoes de trabalho concluidas
             }
 
-            const textoExibicao = textoSemAcoes || (acoes.length === 0 ? resposta : '');
-            let html = textoExibicao ? this._md.render(textoExibicao) : '';
-            if (logAcoes) {
-                html += `<div style="margin-top:10px;border-top:1px solid #333;padding-top:6px">${logAcoes}</div>`;
+            const debugTags = respostasRaw.join('\n');
+
+            // conteudo final: narracao limpa + blocos de arquivos gerados/editados (nao somem
+            // da tela) + log de acoes
+            let html = narracoes.length ? this._md.render(narracoes.join('\n\n')) : '';
+            html += this._montarBlocosConteudo(todasAcoes);
+            if (logLinhas.length) {
+                html += `<div style="margin-top:10px;border-top:1px solid #333;padding-top:6px">${logLinhas.join('')}</div>`;
+            }
+            if (iter >= maxIteracoes && debugTags && /\[(FILE_READ|LIST_FILES|MCP_CALL)\]/i.test(debugTags)) {
+                html += `<div style="margin-top:8px;font-size:11px;color:#ff8844">⚠ Número máximo de passos de exploração atingido (${maxIteracoes}). Ajuste orunvs.maxIteracoes se necessário.</div>`;
             }
             this._mostrarStreamFinal(html);
 
-            // adiciona resposta da IA ao historico
-            this._historico.push({ role: 'model', text: resposta });
-            // adiciona resultados de leitura para a IA ver no proximo turno
-            if (resultadosLeitura) {
-                this._historico.push({ role: 'user', text: `[Resultados de operações]\n${resultadosLeitura}` });
+            // sugestoes proativas de verificacao se houve edicao/criacao de arquivos
+            if (todasAcoes.some((a) => a.tipo === 'EDIT' || a.tipo === 'CREATE' || a.tipo === 'DELETE')) {
+                this._sugerirVerificacoes(todasAcoes, pasta);
             }
         } catch (err: any) {
             if (err.name === 'AbortError') {
-                this._mostrar('<span style="color:#ff8844">Requisição cancelada.</span>');
+                this._finalizarStreamParcial('<span style="color:#ff8844">Requisição cancelada.</span>');
             } else {
-                this._mostrar(`<span style="color:#ff4444">Erro: ${err.message}</span>`);
+                this._finalizarStreamParcial(`<span style="color:#ff4444">Erro: ${err.message}</span>`);
             }
         } finally {
             this._abortController = null;
+            this._streamBase = '';
             if (this._view) this._view.webview.postMessage({ type: 'streamingTerminou' });
             this._editandoMensagem = null;
         }
@@ -752,11 +769,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             throw new Error('Nenhum provider disponível na cadeia de fallback. Verifique as chaves de API nas settings.');
         }
 
-        // Orçamento total de tempo para TODA a cadeia: se nenhum provider responder dentro
-        // de `orunvs.timeoutMs`, a chamada falha com mensagem clara em vez de ficar presa
-        // em "Processando..." para sempre (provider travado/stalled).
-        const timeoutMs = Math.max(10_000, config.get<number>('timeoutMs') ?? 120_000);
-        const deadline = Date.now() + timeoutMs;
+        // Timeout por INATIVIDADE (stall): `orunvs.timeoutMs` é o tempo máximo SEM receber
+        // tokens do provider. Um stream ativo que continua recebendo dados NUNCA é cortado
+        // (antes o prazo era TOTAL e derrubava respostas longas de geração de código no meio).
+        // Existe ainda um teto absoluto de segurança bem maior para casos degenerados.
+        const stallMs = Math.max(10_000, config.get<number>('timeoutMs') ?? 120_000);
+        const tetoTotalMs = Math.max(stallMs * 5, 15 * 60_000);
+        const deadline = Date.now() + tetoTotalMs;
 
         const eventos: { de: string; para: string; motivo: string; etaMs: number | null }[] = [];
         for (let i = 0; i < cadeia.length; i++) {
@@ -764,7 +783,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             if (restante <= 0) break; // orçamento esgotado — não tenta mais providers
             const item = cadeia[i];
             try {
-                const texto = await this._chamarModeloUnico(item.provider, item.model, config, temperature, maxTokens, restante);
+                const texto = await this._chamarModeloUnico(item.provider, item.model, config, temperature, maxTokens, stallMs, tetoTotalMs);
                 this._view?.webview.postMessage({
                     type: 'providerInfo',
                     value: { ativo: item.provider, modelo: item.model, eventos },
@@ -787,7 +806,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const resumo = eventos
             .map((e) => `${this._rotuloProvider(e.de)} (${e.motivo}${e.etaMs ? ` — volta em ~${formatarEta(e.etaMs)}` : ''})`)
             .join(' → ');
-        throw new Error(`Todos os providers falharam. ${resumo || `Nenhum provider respondeu em ${Math.round(timeoutMs / 1000)}s.`}`);
+        throw new Error(`Todos os providers falharam. ${resumo || `Nenhum provider respondeu dentro do prazo (teto de segurança de ${Math.round(tetoTotalMs / 60_000)}min).`}`);
     }
 
     private _rotuloProvider(provider: string): string {
@@ -902,38 +921,63 @@ export class ChatProvider implements vscode.WebviewViewProvider {
      * ou sem [DONE]). O abort do usuário (⏹ Parar) também cancela o fetch/SDK real via
      * signal, não só a animação.
      */
-    private async _chamarModeloUnico(provider: string, modelName: string, config: vscode.WorkspaceConfiguration, temperature: number, maxTokens: number, tempoRestanteMs: number): Promise<string> {
+    private async _chamarModeloUnico(provider: string, modelName: string, config: vscode.WorkspaceConfiguration, temperature: number, maxTokens: number, tempoStallMs: number, tetoTotalMs: number): Promise<string> {
         const localController = new AbortController();
         let estourouTimeout = false;
-        const gatilhoState: { limpar: (() => void) | null } = { limpar: null };
+        let motivoTempo: 'stall' | 'teto' | null = null;
+        let venceu = false;
+        const gatilhoState: { resolver: ((motivo: 'timeout' | 'abort') => void) | null; limpar: (() => void) | null } = { resolver: null, limpar: null };
 
-        // Gatilho que encerra a tentativa cedo: timeout OU cancelamento do usuário.
-        // Resolve (nunca rejeita) para não gerar unhandled rejection quando o stream vence.
-        const gatilho = new Promise<'timeout' | 'abort'>((resolve) => {
-            const timer = setTimeout(() => {
+        let stallTimer: NodeJS.Timeout | null = null;
+        let totalTimer: NodeJS.Timeout | null = null;
+        const sinalUsuario = this._abortController?.signal;
+
+        const onAbort = () => disparar('abort');
+
+        const limparTimers = () => {
+            if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+            if (totalTimer) { clearTimeout(totalTimer); totalTimer = null; }
+            sinalUsuario?.removeEventListener('abort', onAbort);
+        };
+
+        // Gatilho que encerra a tentativa cedo: timeout de INATIVIDADE (stream sem tokens),
+        // teto de segurança ou cancelamento do usuário. Resolve (nunca rejeita) para não gerar
+        // unhandled rejection quando o stream vence.
+        const disparar = (motivo: 'timeout' | 'abort', origem?: 'stall' | 'teto') => {
+            if (venceu) return;
+            venceu = true;
+            if (motivo === 'timeout') {
                 estourouTimeout = true;
-                localController.abort();
-                resolve('timeout');
-            }, Math.max(1, tempoRestanteMs));
-
-            const sinalUsuario = this._abortController?.signal;
-            if (sinalUsuario && sinalUsuario.aborted) {
-                clearTimeout(timer);
-                localController.abort();
-                resolve('abort');
-                return;
+                motivoTempo = origem ?? 'stall';
             }
-            const onAbort = () => {
-                clearTimeout(timer);
-                localController.abort();
-                resolve('abort');
-            };
-            if (sinalUsuario) sinalUsuario.addEventListener('abort', onAbort, { once: true });
-            gatilhoState.limpar = () => {
-                clearTimeout(timer);
-                sinalUsuario?.removeEventListener('abort', onAbort);
-            };
-        });
+            limparTimers();
+            localController.abort();
+            gatilhoState.resolver?.(motivo);
+        };
+
+        const gatilho = new Promise<'timeout' | 'abort'>((resolve) => { gatilhoState.resolver = resolve; });
+
+        // timeout por inatividade: reseta a cada chunk recebido — um stream ativo (mesmo que
+        // demore minutos) NUNCA é cortado; só um stream travado (sem tokens) dispara.
+        const resetarStall = () => {
+            if (stallTimer) clearTimeout(stallTimer);
+            stallTimer = setTimeout(() => disparar('timeout', 'stall'), Math.max(1, tempoStallMs));
+        };
+
+        if (sinalUsuario?.aborted) {
+            disparar('abort');
+        } else if (sinalUsuario) {
+            sinalUsuario.addEventListener('abort', onAbort, { once: true });
+        }
+        totalTimer = setTimeout(() => disparar('timeout', 'teto'), Math.max(1, tetoTotalMs));
+        resetarStall();
+
+        const mensagemTimeout = () => {
+            if (motivoTempo === 'teto') {
+                return `Tempo total excedido no provider ${provider} (teto de segurança de ${Math.max(1, Math.round(tetoTotalMs / 60_000))}min)`;
+            }
+            return `Timeout do provider ${provider} (sem receber dados em ${Math.max(1, Math.round(tempoStallMs / 1000))}s)`;
+        };
 
         const executarStream = async (): Promise<string> => {
             if (provider === 'gemini') {
@@ -982,6 +1026,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                     if (localController.signal.aborted) throw new Error('Requisição cancelada');
                     const { done, value } = await reader.read();
                     if (done) break;
+                    resetarStall(); // chegou dado → stream ativo, renova o prazo de inatividade
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split('\n');
                     buffer = lines.pop() || '';
@@ -1010,7 +1055,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             }
             const apiKey = config.get<string>(p.apiKeyField) || '';
             if (p.apiKeyField && !apiKey) { throw new Error(`Configure ${p.apiKeyField} nas settings`); }
-            const clientOpts: any = { baseURL: p.baseURL, dangerouslyAllowBrowser: true, timeout: Math.max(1, tempoRestanteMs) };
+            // timeout do SDK = teto absoluto (o prazo de inatividade é controlado pelo stallTimer;
+            // antes o timeout do SDK era o prazo total e cortava streams longos e ativos)
+            const clientOpts: any = { baseURL: p.baseURL, dangerouslyAllowBrowser: true, timeout: Math.max(1, tetoTotalMs) };
             if (apiKey) clientOpts.apiKey = apiKey;
             const client = new OpenAI(clientOpts);
 
@@ -1032,6 +1079,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
             let textoAcumulado = '';
             for await (const chunk of stream) {
                 if (localController.signal.aborted) throw new Error('Requisição cancelada');
+                resetarStall(); // chegou chunk → stream ativo, renova o prazo de inatividade
                 const text = chunk.choices?.[0]?.delta?.content || '';
                 if (text) {
                     textoAcumulado += text;
@@ -1046,6 +1094,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const streamPromise = executarStream();
         void streamPromise.catch(() => { /* tratado pelo Promise.race */ });
 
+        gatilhoState.limpar = limparTimers;
+
         try {
             const vencedor = await Promise.race([
                 streamPromise.then((texto) => ({ ok: true as const, texto })),
@@ -1057,10 +1107,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
                 e.name = 'AbortError';
                 throw e;
             }
-            throw new Error(`Timeout do provider ${provider} (sem resposta completa em ${Math.max(1, Math.round(tempoRestanteMs / 1000))}s)`);
+            throw new Error(mensagemTimeout());
         } catch (err: any) {
             if (estourouTimeout) {
-                throw new Error(`Timeout do provider ${provider} (sem resposta completa em ${Math.max(1, Math.round(tempoRestanteMs / 1000))}s)`);
+                throw new Error(mensagemTimeout());
             }
             throw err;
         } finally {
@@ -1070,13 +1120,50 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
     private _mostrarStream(markdownText: string) {
         if (!this._view) return;
-        const html = this._md.render(markdownText);
+        // renderiza a base acumulada (iterações anteriores do loop de agente) + o que está
+        // chegando agora — o conteúdo não "pisca"/"some" entre passos de exploração
+        const html = this._md.render(this._streamBase ? `${this._streamBase}\n\n${markdownText}` : markdownText);
         this._view.webview.postMessage({ type: 'respostaIAStream', value: html });
     }
 
     private _mostrarStreamFinal(html: string) {
         if (!this._view) return;
         this._view.webview.postMessage({ type: 'respostaIAStreamFinal', value: html });
+    }
+
+    /**
+     * Encerra a mensagem preservando o que já foi streamado (não "some da tela"): finaliza o
+     * bubble de streaming e anexa um aviso HTML (erro/cancelamento) embaixo do conteúdo parcial.
+     */
+    private _finalizarStreamParcial(avisoHtml: string) {
+        if (!this._view) return;
+        this._view.webview.postMessage({ type: 'respostaIAStreamFinalManter', value: avisoHtml });
+    }
+
+    /**
+     * Monta blocos de código dos arquivos criados/editados pela IA. O conteúdo vai escapado
+     * em <pre class="pre"> (dobrável no webview) com o caminho do arquivo — assim o código
+     * gerado aparece de verdade no chat em vez de sumir ao substituir o streaming.
+     */
+    private _montarBlocosConteudo(acoes: Acao[]): string {
+        const blocos = acoes.filter((a) => a.tipo === 'EDIT' || a.tipo === 'CREATE');
+        if (blocos.length === 0) return '';
+        let html = '<div style="margin-top:10px">';
+        for (const acao of blocos) {
+            const path = acao.path || acao.nome || 'arquivo';
+            html += `<div style="font-size:11px;color:#66ccff;margin:6px 0 2px">📄 ${this._escapeHtml(path)}</div>`;
+            html += `<pre class="pre">${this._escapeHtml(acao.conteudo ?? '')}</pre>`;
+        }
+        html += '</div>';
+        return html;
+    }
+
+    private _escapeHtml(s: string): string {
+        return s
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
     private async _exportarChat() {
@@ -1223,6 +1310,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         const scriptUri = mediaUri('main.js');
         const fundoSrc = mediaUri('Fundo.png');
         const videoSrc = mediaUri('LoadPerfeito.mp4');
+        const versao = (this._ctx.extension.packageJSON as any)?.version || 'dev';
 
         const nonce = getNonce();
         const cspSource = webview ? webview.cspSource : 'https:';
@@ -1642,7 +1730,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     <button id="novaTabBtn">+</button>
 </div>
 <div id="bar">
-    <span class="title"><img src="${logoSrc}" alt=""> ORUN VS <small>v0.2</small></span>
+    <span class="title"><img src="${logoSrc}" alt=""> ORUN VS <small>v${versao}</small></span>
     <button class="bar-btn" id="exportBtn" title="Exportar conversa">📥</button>
     <button class="bar-btn" id="clearBtn" title="Limpar chat">✕</button>
     <button id="trocarBtn">Modelos</button>

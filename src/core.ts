@@ -634,6 +634,24 @@ export function parseAcoes(texto: string): { acoes: Acao[]; textoSemAcoes: strin
     return { acoes, textoSemAcoes: limpo.trim() };
 }
 
+/**
+ * Ações "exploratórias": leem informação do ambiente para alimentar o próximo
+ * passo do modelo (arquivo, listagem, skill, ferramenta MCP). Quando o modelo
+ * emite este tipo de ação, a resposta ainda não terminou — os resultados devem
+ * voltar para o modelo continuar o trabalho.
+ */
+export function ehAcaoExploratoria(acao: Acao): boolean {
+    return acao.tipo === 'READ' || acao.tipo === 'LIST' || acao.tipo === 'LOAD_SKILL' || acao.tipo === 'MCP_CALL';
+}
+
+/**
+ * Indica se o turno deve continuar (loop de agente): houve ações exploratórias
+ * cujos resultados precisam ser devolvidos ao modelo antes de encerrar.
+ */
+export function precisaContinuarLoop(acoes: Acao[]): boolean {
+    return acoes.some(ehAcaoExploratoria);
+}
+
 export function listarArquivos(pasta: string, prefixo: string = ''): string[] {
     const resultados: string[] = [];
     try {

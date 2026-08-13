@@ -2,7 +2,7 @@
   "name": "orunvs",
   "displayName": "OrunVS",
   "description": "Assistente de IA para VS Code com suporte a múltiplos providers (OpenCodeZen, Gemini, Groq, OpenRouter, DeepSeek, Hugging Face, Ollama)",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "orunst",
   "icon": "resources/icon.png",
   "repository": {
@@ -200,17 +200,24 @@
         },
         "orunvs.maxTokens": {
           "type": "number",
-          "default": 4096,
+          "default": 8192,
           "minimum": 256,
-          "maximum": 8192,
+          "maximum": 16384,
           "description": "Máximo de tokens na resposta"
+        },
+        "orunvs.maxIteracoes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Máximo de passos do loop de agente por pergunta. Quando a IA explora o projeto ([FILE_READ]/[LIST_FILES]/[LOAD_SKILL]/[MCP_CALL]), os resultados voltam para ela e ela continua codando até entregar o trabalho — este limite evita loops infinitos de exploração"
         },
         "orunvs.timeoutMs": {
           "type": "number",
           "default": 120000,
           "minimum": 10000,
           "maximum": 600000,
-          "description": "Tempo máximo (ms) que uma pergunta pode levar antes de falhar com mensagem clara. Se o provider não completar a resposta dentro do prazo, a cadeia de fallback tenta o próximo (se houver tempo); esgotado tudo, a extensão mostra erro em vez de ficar presa em 'Processando...' para sempre"
+          "description": "Timeout de INATIVIDADE (ms): tempo máximo SEM receber dados do provider. Um stream que continua recebendo tokens nunca é cortado — só um provider travado (sem responder) dispara o fallback. Há um teto de segurança absoluto de 5x este valor (mín. 15 min) para casos degenerados"
         },
         "orunvs.presets": {
           "type": "array",

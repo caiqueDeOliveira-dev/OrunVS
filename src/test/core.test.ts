@@ -17,6 +17,8 @@ import {
     montarCadeiaFallback,
     CadeiaItem,
     enriquecerSystemPrompt,
+    ehAcaoExploratoria,
+    precisaContinuarLoop,
 } from '../core';
 import { blocoMemoriasRelevantes } from '../memory';
 import { blocoAvailableSkills } from '../skills';
@@ -452,5 +454,40 @@ describe('listarArquivos', () => {
         assert.ok(!lista.some((x) => x.includes('out/')));
         assert.ok(!lista.some((x) => x.includes('.vscode')));
         fs.rmSync(tmp, { recursive: true, force: true });
+    });
+});
+
+describe('ehAcaoExploratoria / precisaContinuarLoop', () => {
+    it('reconhece leitura/lista/skill/mcp como exploratórias', () => {
+        assert.ok(ehAcaoExploratoria({ tipo: 'READ', path: 'a.ts' }));
+        assert.ok(ehAcaoExploratoria({ tipo: 'LIST', path: 'src' }));
+        assert.ok(ehAcaoExploratoria({ tipo: 'LOAD_SKILL', nome: 'developer' }));
+        assert.ok(ehAcaoExploratoria({ tipo: 'MCP_CALL', mcpTool: 'git__status' }));
+    });
+
+    it('trata edição/criação/delete/comando como trabalho final (não exploratório)', () => {
+        assert.ok(!ehAcaoExploratoria({ tipo: 'EDIT', path: 'a.ts', conteudo: 'x' }));
+        assert.ok(!ehAcaoExploratoria({ tipo: 'CREATE', path: 'b.ts', conteudo: 'x' }));
+        assert.ok(!ehAcaoExploratoria({ tipo: 'DELETE', path: 'lixo.txt' }));
+        assert.ok(!ehAcaoExploratoria({ tipo: 'RUN_CMD', comando: 'npm test' }));
+        assert.ok(!ehAcaoExploratoria({ tipo: 'OPEN', path: 'a.ts' }));
+        assert.ok(!ehAcaoExploratoria({ tipo: 'MEMORY_SAVE', chave: 'k', conteudo: 'v' }));
+    });
+
+    it('precisaContinuarLoop só continua quando há ação exploratória', () => {
+        assert.ok(precisaContinuarLoop([{ tipo: 'READ', path: 'a.ts' }]));
+        assert.ok(precisaContinuarLoop([
+            { tipo: 'LIST', path: 'src' },
+            { tipo: 'READ', path: 'src/a.ts' },
+        ]));
+        // mistura com trabalho final também continua (a leitura ainda precisa voltar ao modelo)
+        assert.ok(precisaContinuarLoop([
+            { tipo: 'READ', path: 'a.ts' },
+            { tipo: 'EDIT', path: 'b.ts', conteudo: 'x' },
+        ]));
+        assert.ok(!precisaContinuarLoop([]));
+        assert.ok(!precisaContinuarLoop([{ tipo: 'EDIT', path: 'a.ts', conteudo: 'x' }]));
+        assert.ok(!precisaContinuarLoop([{ tipo: 'RUN_CMD', comando: 'npm test' }]));
+        assert.ok(!precisaContinuarLoop([{ tipo: 'CREATE', path: 'b.ts', conteudo: 'x' }]));
     });
 });

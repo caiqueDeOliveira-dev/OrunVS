@@ -338,6 +338,23 @@
                 adicionarInlineEdit();
                 adicionarRegenerar();
                 aplicarHighlight();
+            } else if (data.type === 'respostaIAStreamFinalManter') {
+                // erro/cancelamento: PRESERVA o conteúdo parcial já streamado e anexa o aviso
+                let last = chat.lastElementChild;
+                if (last && last.classList.contains('streaming')) {
+                    last.className = 'msg';
+                } else {
+                    last = document.createElement('div');
+                    last.className = 'msg';
+                    chat.appendChild(last);
+                }
+                const aviso = document.createElement('div');
+                aviso.style.marginTop = '8px';
+                aviso.style.paddingTop = '6px';
+                aviso.style.borderTop = '1px solid #333';
+                aviso.innerHTML = data.value || '';
+                last.appendChild(aviso);
+                scrollAbaixo();
             } else if (data.type === 'limparChat') {
                 chat.innerHTML = '';
                 sugestao.style.display = 'none';
