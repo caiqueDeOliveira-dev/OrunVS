@@ -1,14 +1,28 @@
-# OrunVS
+<div align="center">
+  <h1>🧩 OrunVS</h1>
+  <p><strong>Assistente de IA para Visual Studio Code — múltiplos providers no seu editor</strong></p>
+  <p>
+    <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+    <img src="https://img.shields.io/badge/VS_Code-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="VS Code" />
+    <img src="https://img.shields.io/badge/version-0.3.4-9C27B0?style=for-the-badge" alt="Versão" />
+  </p>
+  <p><em>Chat de IA integrado · arquivos · terminal · multi-provider</em></p>
+  <img src="resources/logo.png" width="120" alt="OrunVS" />
+</div>
 
-Extensão para Visual Studio Code — Assistente de IA com suporte a múltiplos providers.
+---
 
-![OrunVS](resources/logo.png)
+## ✨ Sobre o Projeto
 
-## Funcionalidades
+Assistente de IA integrado na barra de atividades do VS Code, com suporte a **múltiplos providers** — escolha entre modelos gratuitos e pagos, direto do editor.
 
-- Chat lateral integrado na barra de atividades do VS Code
-- Streaming de respostas em tempo real
-- Suporte a múltiplos providers de IA:
+---
+
+## 🎯 Funcionalidades
+
+- 💬 **Chat lateral** na barra de atividades do VS Code
+- ⚡ **Streaming** de respostas em tempo real
+- 🧠 **Múltiplos providers de IA**:
   - **OpenCodeZen** (gratuito — provider recomendado do ecossistema Orun)
   - **Google Gemini** (gratuito)
   - **Groq Cloud** (gratuito)
@@ -16,51 +30,39 @@ Extensão para Visual Studio Code — Assistente de IA com suporte a múltiplos 
   - **DeepSeek** (gratuito)
   - **Hugging Face** (gratuito)
   - **Ollama** (local)
-- Edição, criação e deleção de arquivos com permissão
-- Execução de comandos no terminal
-- Múltiplas conversas (abas)
-- Exportar conversas em Markdown
-- Presets personalizáveis
-- Anexar arquivos e imagens
-- Drag & drop de arquivos
-- Catálogo de modelos
-- Syntax highlighting com Prism.js
-- Copiar blocos de código com um clique
-- Regenerar respostas
+- 📝 **Edição, criação e deleção** de arquivos com permissão
+- 🖥️ **Execução de comandos** no terminal
+- 🗂️ **Múltiplas conversas** (abas)
+- 📄 **Exportar conversas** em Markdown
+- 🎨 **Presets personalizáveis**
+- 🖼️ **Anexar arquivos e imagens**
+- 📥 **Drag & drop** de arquivos
+- 🔍 **Catálogo de modelos**
+- ✨ **Syntax highlighting** com Prism.js
+- 📋 **Copiar blocos** com um clique
+- 🔄 **Regenerar respostas**
 
-## Instalação
+---
+
+## 📦 Instalação
 
 ### Via GitHub
-
-1. Clone o repositório:
-   ```bash
-   git clone https://github.com/caiqueDeOliveira-dev/OrunVS.git
-   ```
-
-2. Abra o projeto no VS Code:
-   ```bash
-   code OrunVS
-   ```
-
-3. Instale as dependências:
-   ```bash
-   npm install
-   ```
-
-4. Compile o projeto:
-   ```bash
-   npm run compile
-   ```
-
-5. Pressione `F5` para iniciar a extensão em modo de depuração.
+```bash
+git clone https://github.com/caiqueDeOliveira-dev/OrunVS.git
+cd OrunVS
+npm install
+npm run compile
+```
+Depois pressione `F5` para iniciar a extensão em modo de depuração.
 
 ### Via VSIX (compactado)
-
 1. Baixe o arquivo `.vsix` nas [releases](https://github.com/caiqueDeOliveira-dev/OrunVS/releases)
 2. No VS Code, vá em **Extensions** → **...** → **Install from VSIX...**
 3. Selecione o arquivo baixado
 
-## Configuração
+---
+
+## ⚙️ Configuração
 
 **Cada usuário deve configurar suas próprias API keys.** A extensão não inclui chaves — nem gratuitas nem pagas. Você precisa criar sua conta no provider e gerar sua chave.
 
@@ -72,7 +74,7 @@ Após instalar, configure sua API key em **Settings** → **Extensions** → **O
 
 | Provider | Configuração | Gratuito? | Como obter |
 |----------|-------------|-----------|------------|
-| OpenCodeZen | `orunvs.opencodezenKey` | Sim | `https://opencode.ai` — provider recomendado do ecossistema Orun |
+| OpenCodeZen | `orunvs.opencodezenKey` | Sim | [opencode.ai](https://opencode.ai) — provider recomendado do ecossistema Orun |
 | Gemini | `orunvs.geminiKey` | Sim | [Google AI Studio](https://aistudio.google.com/apikey) |
 | Groq | `orunvs.groqKey` | Sim | [Groq Cloud](https://console.groq.com) |
 | OpenRouter | `orunvs.openrouterKey` | Sim/Pago | [OpenRouter](https://openrouter.ai/keys) |
@@ -80,7 +82,9 @@ Após instalar, configure sua API key em **Settings** → **Extensions** → **O
 | Hugging Face | `orunvs.huggingfaceKey` | Sim | [Hugging Face](https://huggingface.co/settings/tokens) |
 | Ollama | Nenhuma (local) | Sim | [Ollama](https://ollama.com) — roda no seu PC |
 
-## Comandos
+---
+
+## ⌨️ Comandos
 
 | Comando | Atalho | Descrição |
 |---------|--------|-----------|
@@ -90,7 +94,9 @@ Após instalar, configure sua API key em **Settings** → **Extensions** → **O
 | `OrunVS: Explicar código selecionado` | `Ctrl+Shift+P` | Explica o código selecionado |
 | `OrunVS: Refatorar código selecionado` | `Ctrl+Shift+P` | Refatora o código selecionado |
 
-## Uso
+---
+
+## 🚀 Uso
 
 1. Clique no ícone **OrunVS** na barra de atividades (lateral esquerda)
 2. Configure sua API key nas configurações
@@ -101,18 +107,20 @@ Após instalar, configure sua API key em **Settings** → **Extensions** → **O
 
 A IA pode criar, editar e deletar arquivos automaticamente. Cada ação requer sua permissão:
 
-- ** Criar/Editar arquivo** — Mostra diff do que será alterado
-- ** Deletar arquivo** — Confirma antes de apagar
-- ** Executar comando** — Mostra o comando antes de rodar
+- **Criar/Editar arquivo** — Mostra diff do que será alterado
+- **Deletar arquivo** — Confirma antes de apagar
+- **Executar comando** — Mostra o comando antes de rodar
 
-## Atalhos no chat
+### Atalhos no chat
 
 - **Enter** — Enviar mensagem
 - **Shift+Enter** — Nova linha
 - **/model** — Trocar modelo
 - **/model nome** — Trocar para modelo específico
 
-## Estrutura do projeto
+---
+
+## 🗂️ Estrutura do projeto
 
 ```
 OrunVS/
@@ -131,7 +139,9 @@ OrunVS/
 └── .vscodeignore           # Arquivos excluídos do pacote
 ```
 
-## Tecnologias
+---
+
+## 🧪 Tecnologias
 
 - **TypeScript** — Linguagem principal
 - **VS Code Extension API** — API de extensões
@@ -139,10 +149,18 @@ OrunVS/
 - **Markdown-It** — Renderização de Markdown
 - **Prism.js** — Syntax highlighting
 
-## Licença
+---
 
-MIT
+## 📦 Ecossistema Orun
 
-## Autor
+- 🖥️ **[Orun OS](https://github.com/caiqueDeOliveira-dev/OrunOS)** — o projeto principal (desktop)
+- 📱 **[Orun OS Mobile](https://github.com/caiqueDeOliveira-dev/OrunOs-Mobile)** — versão mobile
+- 🛡️ **[OrunShield](https://github.com/caiqueDeOliveira-dev/OrunShield)** — suite de segurança e otimização
+- ⚙️ **[Orun-Core](https://github.com/caiqueDeOliveira-dev/Orun-Core)** — núcleo compartilhado do ecossistema
+- 🎵 **[Orun Música](https://github.com/caiqueDeOliveira-dev/orun-music-player)** — player de música desktop
 
-**Grupo Orum ST**
+---
+
+## 📄 Licença
+
+MIT — © **Grupo Orum ST**
